@@ -35,7 +35,7 @@
         <h2 class="verdict st-live">Go now. It gets busier until 7 PM.</h2>
         <h2 class="verdict st-closed">The gym is closed right now.</h2>
         <h2 class="verdict st-off">We can't read the gym right now.</h2>
-        <div class="gauge" style="--v:.62" role="img" aria-label="Crowd meter"><div class="arc"></div><div class="needle st-live"></div><div class="hub"></div></div>
+        <div class="gauge crowd-meter" role="img" aria-label="Crowd meter"><div class="arc"></div><div class="needle st-live"></div><div class="hub"></div></div>
         <div class="ends"><span>Quiet</span><span>Packed</span></div>
         <div class="read">
           <div class="big st-live">62% full</div><p class="st-live">Moderately busy</p>
@@ -57,12 +57,12 @@
       <h2>Rest of today</h2>
       <p class="mute">Expected fullness by hour. It peaks at 6 PM, then drops to 48% by 8 PM.</p>
       <div class="bars" role="img" aria-label="Expected gym capacity by hour">
-        <div class="bar now mid" style="--p:62"><em>62%</em><i></i><b>Now</b></div>
-        <div class="bar hot" style="--p:78"><em>78%</em><i></i><b>5 PM</b></div>
-        <div class="bar hot" style="--p:86"><em>86%</em><i></i><b>6 PM</b></div>
-        <div class="bar mid" style="--p:66"><em>66%</em><i></i><b>7 PM</b></div>
-        <div class="bar mid" style="--p:48"><em>48%</em><i></i><b>8 PM</b></div>
-        <div class="bar go" style="--p:30"><em>30%</em><i></i><b>9 PM</b></div>
+        <div class="bar now mid capacity-now"><em>62%</em><i></i><b>Now</b></div>
+        <div class="bar hot capacity-5pm"><em>78%</em><i></i><b>5 PM</b></div>
+        <div class="bar hot capacity-6pm"><em>86%</em><i></i><b>6 PM</b></div>
+        <div class="bar mid capacity-7pm"><em>66%</em><i></i><b>7 PM</b></div>
+        <div class="bar mid capacity-8pm"><em>48%</em><i></i><b>8 PM</b></div>
+        <div class="bar go capacity-9pm"><em>30%</em><i></i><b>9 PM</b></div>
       </div>
     </div>
   </section>
