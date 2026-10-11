@@ -680,6 +680,14 @@ main {
 
 .auth-btn:hover { background: rgba(255, 255, 255, .12); }
 
+.auth-user {
+  position: absolute;
+  top: 26px;
+  right: 112px;
+  color: #B9CBE6;
+  font-size: .85rem;
+}
+
 .auth-btn:focus-visible,
 .auth-dialog button:focus-visible,
 .auth-dialog input:focus-visible {
