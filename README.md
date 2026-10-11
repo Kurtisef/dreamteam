@@ -1,7 +1,7 @@
 # IS 401 Semester Project
 
 ## App Summary:
-The BYU Gym Planner solves the daily frustration of arriving at the campus recreation facilities only to find overcrowded weight floors and long lines for equipment. This problem is primarily experienced by BYU students, faculty, and staff trying to fit workouts into tight academic schedules. Our application provides real-time visibility into the gym's status by displaying live capacity percentages, estimated wait times for entry and equipment, and active camera stream statuses. It offers a predictive "Week View" that forecasts the quietest hours based on an 8-week historical rolling average. Finally, users can create authenticated accounts to securely log their intended workout times, which the system ties to their profile to dynamically adjust future busyness predictions.
+The BYU Gym Planner solves the daily frustration of arriving at the campus recreation facilities only to find overcrowded weight floors and long lines for equipment. This problem is primarily experienced by BYU students, faculty, and staff trying to fit workouts into tight academic schedules. Our application provides real-time visibility into the gym's status by displaying live capacity percentages, estimated wait times for entry and equipment, and active camera stream statuses. It offers a predictive "Week View" that forecasts the quietest hours based on an 8-week historical rolling average. Finally, users can submit their email address to their profile for future account features.
 
 ## ERD
 ![Gym Tracker ERD](ERD.png)
@@ -17,12 +17,12 @@ We plan on using Vanilla HTML, CSS, and JavaScript (No build steps or complex fr
 5. Right-click the index.html file and select "Open with Live Server".
 6. The application will automatically open in your default web browser at [http://127.0.0.1:5500](http://127.0.0.1:5500). The Supabase connection is already configured in the code, so live data will populate immediately.
 
-## Verifying the Vertical Slice
-To verify that the frontend successfully communicates with the Supabase authentication backend (the vertical slice):
+## Verifying the Profile Vertical Slice
+To verify that the frontend saves a username and email, then uses both values for the simple passwordless login:
 
 1. Open the application using the Live Server instructions above.
-2. Navigate to the Sign Up / Log In section of the interface.
-3. Enter a test email and password, and click the "Create Account" or "Log In" button.
-4. You should receive a success confirmation, and the UI should update to reflect your authenticated state.
-5. Refresh the webpage entirely.
-6. Check that the interface still shows you as logged in. This proves that the Supabase session token was successfully stored in the browser and retrieved upon page reload to maintain the active backend connection.
+2. Click the "Log in" button.
+3. Click "New here? Create a profile".
+4. Enter a username and email, then click "Save profile".
+5. Log out, enter the same username and email, and click "Log in".
+6. In Supabase Table Editor, open `profiles` and confirm that the username was saved in `display_name` and the email was saved in `email`.
