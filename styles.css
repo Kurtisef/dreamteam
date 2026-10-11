@@ -660,3 +660,96 @@ main {
   .verdict { font-size: 2rem; }
   .bars { gap: 6px; }
 }
+
+/* Login button in the header */
+.top .in { position: relative; }
+.top h1 { padding-right: 96px; }
+
+.auth-btn {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  padding: 7px 16px;
+  border: 1.5px solid #B9CBE6;
+  border-radius: 99px;
+  background: transparent;
+  color: #fff;
+  font: 600 .9rem "Public Sans", system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.auth-btn:hover { background: rgba(255, 255, 255, .12); }
+
+.auth-btn:focus-visible,
+.auth-dialog button:focus-visible,
+.auth-dialog input:focus-visible {
+  outline: 3px solid #7FB2FF;
+  outline-offset: 2px;
+}
+
+/* Login dialog */
+.auth-dialog {
+  width: min(92vw, 380px);
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  font: 16px/1.5 "Public Sans", system-ui, sans-serif;
+}
+
+.auth-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+
+.auth-dialog h2 {
+  font-size: 1.75rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.auth-dialog label {
+  display: block;
+  margin: 14px 0 4px;
+  font-weight: 600;
+  font-size: .92rem;
+}
+
+.auth-dialog input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+}
+
+.auth-dialog button[type="submit"] {
+  width: 100%;
+  margin-top: 18px;
+  padding: 11px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--bg);
+  font: 600 1rem "Public Sans", system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.auth-dialog button[type="submit"]:disabled { opacity: .6; cursor: wait; }
+
+.auth-dialog .link {
+  display: block;
+  margin: 10px auto 0;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: var(--mute);
+  font: inherit;
+  font-size: .9rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+#auth-msg { margin-top: 12px; min-height: 1.5em; font-size: .9rem; }
+#auth-msg.err { color: var(--hot); }
+#auth-msg.ok { color: var(--go); }
