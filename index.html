@@ -13,6 +13,7 @@
 <input class="sr" type="radio" name="t" id="t-home" checked aria-label="Home">
 <input class="sr" type="radio" name="t" id="t-live" aria-label="Live feed">
 <input class="sr" type="radio" name="t" id="t-week" aria-label="Week view">
+<input class="sr" type="radio" name="t" id="t-plan" aria-label="Plan a visit">
 <input class="sr" type="radio" name="s" id="s-live" checked aria-label="Preview live data">
 <input class="sr" type="radio" name="s" id="s-closed" aria-label="Preview closed">
 <input class="sr" type="radio" name="s" id="s-off" aria-label="Preview sensors offline">
@@ -23,7 +24,11 @@
   <p>Know before you go. For BYU students and faculty.</p>
   <span id="auth-user" class="auth-user" aria-live="polite"></span>
   <button id="auth-btn" class="auth-btn" type="button">Log in</button>
-  <nav class="tabs" aria-label="Screens"><label for="t-home">Home</label><label for="t-live">Live feed</label><label for="t-week">Week view</label></nav>
+  <nav class="tabs" aria-label="Screens">
+    <label for="t-home">Home</label>
+    <label for="t-live">Live feed</label><label for="t-week">Week view</label>
+    <label for="t-plan">Plan visit</label>
+  </nav>
 </div></header>
 
 <main>
@@ -143,6 +148,102 @@
         <span><i class="l3 p"></i>Predicted</span><span><i class="x"></i>Closed</span>
       </div>
       <p class="note">Sunday is left out on purpose: the gym is closed all day, so there is no data to show.</p>
+    </div>
+  </section>
+
+  <!-- PLAN A VISIT -->
+  <section class="screen plan" aria-label="Plan a visit">
+    <h2>Plan a visit</h2>
+    <p class="lead">Log your intended workout window and equipment needs. Max 2 hours per day, up to 7 days in advance.</p>
+
+    <!-- Shown when logged out -->
+    <div id="plan-gate" class="card plan-gate">
+      <h3>Log in to reserve a workout window</h3>
+      <p class="mute">You need an active profile to schedule gym visits and select equipment.</p>
+      <button type="button" id="plan-login-trigger" class="btn-primary">Log in or create a profile</button>
+    </div>
+
+    <!-- Shown when logged in -->
+    <div id="plan-content" class="plan-grid" hidden>
+      <form id="plan-form" class="card plan-form" novalidate>
+        <h3>New reservation</h3>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="plan-date">Date</label>
+            <input type="date" id="plan-date" required>
+          </div>
+          <div class="field">
+            <label for="plan-time">Start time</label>
+            <select id="plan-time" required>
+              <option value="06:00">6:00 AM</option>
+              <option value="07:00">7:00 AM</option>
+              <option value="08:00">8:00 AM</option>
+              <option value="09:00">9:00 AM</option>
+              <option value="10:00">10:00 AM</option>
+              <option value="11:00">11:00 AM</option>
+              <option value="12:00">12:00 PM</option>
+              <option value="13:00">1:00 PM</option>
+              <option value="14:00">2:00 PM</option>
+              <option value="15:00">3:00 PM</option>
+              <option value="16:00">4:00 PM</option>
+              <option value="17:00">5:00 PM</option>
+              <option value="18:00">6:00 PM</option>
+              <option value="19:00">7:00 PM</option>
+              <option value="20:00">8:00 PM</option>
+              <option value="21:00">9:00 PM</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="plan-duration">Duration</label>
+            <select id="plan-duration" required>
+              <option value="30">30 min</option>
+              <option value="60" selected>1 hour</option>
+              <option value="90">1.5 hours</option>
+              <option value="120">2 hours</option>
+            </select>
+          </div>
+        </div>
+
+        <fieldset class="equip-group">
+          <legend>Intended equipment <span class="mute">(select at least one)</span></legend>
+          <div class="equip-checks">
+            <label class="check-pill">
+              <input type="checkbox" name="equipment" value="Racks">
+              <span>Racks</span>
+            </label>
+            <label class="check-pill">
+              <input type="checkbox" name="equipment" value="Dumbbells">
+              <span>Dumbbells</span>
+            </label>
+            <label class="check-pill">
+              <input type="checkbox" name="equipment" value="Cable stacks">
+              <span>Cable stacks</span>
+            </label>
+            <label class="check-pill">
+              <input type="checkbox" name="equipment" value="Weight machines">
+              <span>Weight machines</span>
+            </label>
+            <label class="check-pill">
+              <input type="checkbox" name="equipment" value="Cardio machines">
+              <span>Cardio machines</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <p id="plan-msg" role="status" aria-live="polite"></p>
+        <button type="submit" id="plan-submit" class="btn-primary">Reserve time</button>
+      </form>
+
+      <div class="card plan-list-card">
+        <div class="plan-list-header">
+          <h3>Your upcoming visits</h3>
+          <span id="daily-quota-badge" class="quota-badge">0 / 120 min on selected date</span>
+        </div>
+        <div id="plan-list" class="plan-list">
+          <p class="mute">No upcoming visits scheduled.</p>
+        </div>
+      </div>
     </div>
   </section>
 </main>
