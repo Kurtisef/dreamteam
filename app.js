@@ -6,6 +6,7 @@
     SUPABASE_URL,
     SUPABASE_PUBLISHABLE_KEY
   );
+  window.sb = sb;
 
   const $ = (id) => document.getElementById(id);
   const dialog = $("auth-dialog");
@@ -34,12 +35,18 @@
     sessionStorage.setItem("profile", JSON.stringify(profile));
     $("auth-user").textContent = `Logged in as ${profile.display_name}`;
     $("auth-btn").textContent = "Log out";
+    
+    // --> ADD THIS LINE HERE <--
+    if (typeof window.syncPlanAuthState === 'function') window.syncPlanAuthState();
   }
 
   function logOut() {
     sessionStorage.removeItem("profile");
     $("auth-user").textContent = "";
-    $("auth-btn").textContent = "Log in";
+    $("auth-btn").textContent = "Log out";
+    
+    // --> AND ADD THIS LINE HERE <--
+    if (typeof window.syncPlanAuthState === 'function') window.syncPlanAuthState();
   }
 
   $("auth-toggle").addEventListener("click", () =>
@@ -113,13 +120,23 @@
   }
 })();
 
-// --- PLAN A VISIT LOGIC (Auto-detects login state) ---
+// --- PLAN A VISIT LOGIC (Direct sessionStorage profile integration) ---
 (() => {
+  const getSupabaseClient = () => {
+    if (typeof sb !== 'undefined') return sb;
+    if (typeof supabaseClient !== 'undefined') return supabaseClient;
+    if (typeof db !== 'undefined') return db;
+    if (typeof client !== 'undefined') return client;
+    if (typeof window !== 'undefined' && window.sb) return window.sb;
+    if (typeof window !== 'undefined' && window.supabaseClient) return window.supabaseClient;
+    if (typeof supabase !== 'undefined' && typeof supabase.from === 'function') return supabase;
+    return null;
+  };
+
   const planGate = document.getElementById('plan-gate');
   const planContent = document.getElementById('plan-content');
   const loginTrigger = document.getElementById('plan-login-trigger');
   const authDialog = document.getElementById('auth-dialog');
-  const authUserSpan = document.getElementById('auth-user');
   const authBtn = document.getElementById('auth-btn');
 
   const planForm = document.getElementById('plan-form');
@@ -129,15 +146,32 @@
   const planMsg = document.getElementById('plan-msg');
   const planList = document.getElementById('plan-list');
   const quotaBadge = document.getElementById('daily-quota-badge');
+  const submitBtn = document.getElementById('plan-submit');
 
-  let currentUser = null;
+  let currentProfileId = null;
   let visits = [];
+
+  const EQUIP_MAP = [
+    { label: 'Racks', col: 'racks' },
+    { label: 'Dumbbells', col: 'dumbbells' },
+    { label: 'Cable stacks', col: 'cable_stacks' },
+    { label: 'Weight machines', col: 'weight_machines' },
+    { label: 'Cardio machines', col: 'cardio_machines' }
+  ];
 
   function toLocalISODate(d) {
     const yr = d.getFullYear();
     const mo = String(d.getMonth() + 1).padStart(2, '0');
     const da = String(d.getDate()).padStart(2, '0');
     return `${yr}-${mo}-${da}`;
+  }
+
+  function toLocalTimestampString(d) {
+    const datePart = toLocalISODate(d);
+    const hr = String(d.getHours()).padStart(2, '0');
+    const mn = String(d.getMinutes()).padStart(2, '0');
+    const sc = String(d.getSeconds()).padStart(2, '0');
+    return `${datePart}T${hr}:${mn}:${sc}`;
   }
 
   function configureDateBounds() {
@@ -160,10 +194,20 @@
     planMsg.className = isError ? 'err' : 'ok';
   }
 
+  function getVisitDurationMinutes(row) {
+    const start = new Date(row.intended_arrival);
+    const end = new Date(row.exit_time);
+    return Math.round((end - start) / 60000);
+  }
+
+  function getVisitDateStr(row) {
+    return toLocalISODate(new Date(row.intended_arrival));
+  }
+
   function getMinutesBookedForDate(dateStr) {
     return visits
-      .filter(v => v.date === dateStr)
-      .reduce((sum, v) => sum + Number(v.duration), 0);
+      .filter(v => getVisitDateStr(v) === dateStr)
+      .reduce((sum, v) => sum + getVisitDurationMinutes(v), 0);
   }
 
   function updateQuotaBadge() {
@@ -173,12 +217,9 @@
     quotaBadge.textContent = `${used} / 120 min booked on ${selectedDate}`;
   }
 
-  function formatTimeLabel(time24) {
-    const [hStr, mStr] = time24.split(':');
-    const h = Number(hStr);
-    const suffix = h >= 12 ? 'PM' : 'AM';
-    const h12 = h % 12 || 12;
-    return `${h12}:${mStr} ${suffix}`;
+  function formatTimeRange(startIso, endIso) {
+    const fmt = (d) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return `${fmt(new Date(startIso))} – ${fmt(new Date(endIso))}`;
   }
 
   function renderVisits() {
@@ -186,53 +227,85 @@
 
     const now = new Date();
     const upcoming = visits
-      .filter(v => new Date(`${v.date}T${v.time}:00`) >= now)
-      .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`));
+      .filter(v => new Date(v.exit_time) >= now)
+      .sort((a, b) => new Date(a.intended_arrival) - new Date(b.intended_arrival));
 
     if (upcoming.length === 0) {
       planList.innerHTML = '<p class="mute">No upcoming visits scheduled.</p>';
       return;
     }
 
-    planList.innerHTML = upcoming.map(v => `
-      <div class="visit-item">
-        <div class="visit-info">
-          <b>${v.date} at ${formatTimeLabel(v.time)} (${v.duration} min)</b>
-          <div class="visit-tags">
-            ${v.equipment.map(eq => `<span class="visit-tag">${eq}</span>`).join('')}
+    planList.innerHTML = upcoming.map(v => {
+      const dateStr = getVisitDateStr(v);
+      const mins = getVisitDurationMinutes(v);
+      const activeTags = EQUIP_MAP.filter(eq => v[eq.col]).map(eq => eq.label);
+
+      return `
+        <div class="visit-item">
+          <div class="visit-info">
+            <b>${dateStr} · ${formatTimeRange(v.intended_arrival, v.exit_time)} (${mins} min)</b>
+            <div class="visit-tags">
+              ${activeTags.map(label => `<span class="visit-tag">${label}</span>`).join('')}
+            </div>
           </div>
+          <button type="button" class="visit-del" data-id="${v.planned_visit_id}" aria-label="Cancel reservation">Cancel</button>
         </div>
-        <button type="button" class="visit-del" data-id="${v.id}" aria-label="Cancel reservation">Cancel</button>
-      </div>
-    `).join('');
+      `;
+    }).join('');
   }
 
-  function loadVisits() {
-    if (!currentUser) {
+  async function resolveProfileId(displayName, email) {
+    const client = getSupabaseClient();
+    if (!client) return null;
+
+    const { data } = await client
+      .from('profiles')
+      .select('*')
+      .eq('display_name', displayName)
+      .eq('email', email)
+      .limit(1)
+      .maybeSingle();
+
+    if (data) {
+      return data.profile_id || data.id;
+    }
+    return null;
+  }
+
+  async function loadVisits() {
+    const client = getSupabaseClient();
+    if (!client || !currentProfileId) {
       visits = [];
+      renderVisits();
       return;
     }
-    const key = `byu_gym_visits_${currentUser.id}`;
-    try {
-      visits = JSON.parse(localStorage.getItem(key) || '[]');
-    } catch {
-      visits = [];
+
+    const { data, error } = await client
+      .from('planned_visits')
+      .select('*')
+      .eq('profile_id', currentProfileId)
+      .order('intended_arrival', { ascending: true });
+
+    if (error) {
+      console.error('Error loading planned_visits:', error);
+      return;
     }
+
+    visits = data || [];
     renderVisits();
   }
 
-  function saveVisits() {
-    if (!currentUser) return;
-    const key = `byu_gym_visits_${currentUser.id}`;
-    localStorage.setItem(key, JSON.stringify(visits));
-    renderVisits();
-  }
-
-  planForm.addEventListener('submit', (e) => {
+  planForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     showMessage('');
 
-    if (!currentUser) {
+    const client = getSupabaseClient();
+    if (!client) {
+      showMessage('Supabase client not found in app.js.', true);
+      return;
+    }
+
+    if (!currentProfileId) {
       showMessage('You must be logged in to make a reservation.', true);
       return;
     }
@@ -240,7 +313,7 @@
     const dateVal = dateInput.value;
     const timeVal = timeInput.value;
     const durationVal = Number(durationInput.value);
-    const checkedEquip = Array.from(
+    const checkedValues = Array.from(
       planForm.querySelectorAll('input[name="equipment"]:checked')
     ).map(cb => cb.value);
 
@@ -264,17 +337,34 @@
       return;
     }
 
-    const dayOfWeek = startDateTime.getDay();
-    if (dayOfWeek === 0) {
-      showMessage('The gym is closed all day on Sundays.', true);
-      return;
-    }
-    if (dayOfWeek === 2 && timeVal === '11:00') {
-      showMessage('The gym is closed Tuesdays from 11 AM to 12 PM.', true);
+    if (timeVal === '21:00' && durationVal > 60) {
+      showMessage('Reservations starting at 9:00 PM are capped at 1 hour (gym closes at 10 PM).', true);
       return;
     }
 
-    if (checkedEquip.length === 0) {
+    const endDateTime = new Date(startDateTime.getTime() + durationVal * 60000);
+
+    let cursor = new Date(startDateTime);
+    while (cursor < endDateTime) {
+      const dayOfWeek = cursor.getDay();
+      const hour = cursor.getHours();
+
+      if (dayOfWeek === 0) {
+        showMessage('The gym is closed all day on Sundays.', true);
+        return;
+      }
+      if (dayOfWeek === 2 && hour === 11) {
+        showMessage('Your reservation overlaps with the Tuesday 11 AM to 12 PM devotional closure.', true);
+        return;
+      }
+      if (hour >= 22 || (hour < 6 && hour >= 0)) {
+        showMessage('The gym is closed during this time window (Open 6 AM – 10 PM).', true);
+        return;
+      }
+      cursor.setMinutes(cursor.getMinutes() + 15);
+    }
+
+    if (checkedValues.length === 0) {
       showMessage('Select at least one type of equipment you plan to use.', true);
       return;
     }
@@ -289,24 +379,59 @@
       return;
     }
 
-    visits.push({
-      id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
-      date: dateVal,
-      time: timeVal,
-      duration: durationVal,
-      equipment: checkedEquip
-    });
+    const insertPayload = {
+      profile_id: currentProfileId,
+      intended_arrival: toLocalTimestampString(startDateTime),
+      exit_time: toLocalTimestampString(endDateTime),
+      racks: checkedValues.includes('Racks'),
+      dumbbells: checkedValues.includes('Dumbbells'),
+      cable_stacks: checkedValues.includes('Cable stacks'),
+      weight_machines: checkedValues.includes('Weight machines'),
+      cardio_machines: checkedValues.includes('Cardio machines')
+    };
 
-    saveVisits();
+    submitBtn.disabled = true;
+
+    const { data, error } = await client
+      .from('planned_visits')
+      .insert([insertPayload])
+      .select()
+      .single();
+
+    submitBtn.disabled = false;
+
+    if (error) {
+      console.error('Supabase insert error:', error);
+      showMessage(`Database error: ${error.message}`, true);
+      return;
+    }
+
+    visits.push(data);
+    renderVisits();
     planForm.querySelectorAll('input[name="equipment"]:checked').forEach(cb => (cb.checked = false));
-    showMessage('Reservation confirmed!', false);
+    showMessage('Reservation saved!', false);
   });
 
-  planList.addEventListener('click', (e) => {
+  planList.addEventListener('click', async (e) => {
     const btn = e.target.closest('.visit-del');
     if (!btn) return;
-    visits = visits.filter(v => v.id !== btn.dataset.id);
-    saveVisits();
+
+    const client = getSupabaseClient();
+    const visitId = btn.dataset.id;
+
+    const { error } = await client
+      .from('planned_visits')
+      .delete()
+      .eq('planned_visit_id', visitId);
+
+    if (error) {
+      console.error('Supabase delete error:', error);
+      showMessage(`Could not cancel: ${error.message}`, true);
+      return;
+    }
+
+    visits = visits.filter(v => String(v.planned_visit_id) !== String(visitId));
+    renderVisits();
     showMessage('Reservation canceled.', false);
   });
 
@@ -323,39 +448,34 @@
     }
   });
 
-  function syncPlanAuthState(user) {
-    currentUser = user || null;
-    configureDateBounds();
-    if (currentUser) {
-      planGate.hidden = true;
-      planContent.hidden = false;
-      loadVisits();
-    } else {
-      planGate.hidden = false;
-      planContent.hidden = true;
-      visits = [];
+  // Direct check against sessionStorage profile object
+  async function checkAuth() {
+    const rawProfile = sessionStorage.getItem("profile");
+    if (rawProfile) {
+      try {
+        const profile = JSON.parse(rawProfile);
+        if (profile && profile.display_name && profile.email) {
+          currentProfileId = await resolveProfileId(profile.display_name, profile.email);
+          if (currentProfileId) {
+            planGate.hidden = true;
+            planContent.hidden = false;
+            await loadVisits();
+            return;
+          }
+        }
+      } catch (err) {
+        console.error("Auth check error:", err);
+      }
     }
+
+    currentProfileId = null;
+    visits = [];
+    planGate.hidden = false;
+    planContent.hidden = true;
   }
 
-  // Automatically check if user is logged in by reading the header UI or localStorage
-  function checkExistingAuthUI() {
-    const userText = authUserSpan ? authUserSpan.textContent.trim() : '';
-    const btnText = authBtn ? authBtn.textContent.trim().toLowerCase() : '';
-    const isLoggedIn = userText.length > 0 || btnText === 'log out' || btnText === 'logout';
+  window.syncPlanAuthState = checkAuth;
 
-    if (isLoggedIn) {
-      syncPlanAuthState({ id: userText || 'active_user' });
-    } else {
-      syncPlanAuthState(null);
-    }
-  }
-
-  // Watch #auth-user and #auth-btn for changes whenever you log in or log out
-  const observer = new MutationObserver(checkExistingAuthUI);
-  if (authUserSpan) observer.observe(authUserSpan, { childList: true, characterData: true, subtree: true });
-  if (authBtn) observer.observe(authBtn, { childList: true, characterData: true, subtree: true });
-
-  window.syncPlanAuthState = syncPlanAuthState;
   configureDateBounds();
-  checkExistingAuthUI();
+  checkAuth();
 })();
