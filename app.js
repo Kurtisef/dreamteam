@@ -391,6 +391,8 @@
     };
 
     submitBtn.disabled = true;
+    const originalBtnText = submitBtn.textContent;
+    submitBtn.textContent = "Saving reservation..."; // <-- Line 1 (Set loading text)
 
     const { data, error } = await client
       .from('planned_visits')
@@ -399,6 +401,7 @@
       .single();
 
     submitBtn.disabled = false;
+    submitBtn.textContent = originalBtnText; // <-- Line 2 (Reset button text)
 
     if (error) {
       console.error('Supabase insert error:', error);
