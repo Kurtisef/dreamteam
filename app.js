@@ -72,7 +72,12 @@
       return;
     }
 
+    const idleLabel = submitButton.textContent;
     submitButton.disabled = true;
+    submitButton.classList.add("busy");
+    submitButton.textContent = mode === "create" ? "Saving profile…" : "Logging in…";
+    $("auth-toggle").disabled = true;
+    form.setAttribute("aria-busy", "true");
     try {
       let profile;
 
@@ -104,6 +109,10 @@
       showMsg(error.message || "The profile could not be saved or found.");
     } finally {
       submitButton.disabled = false;
+      submitButton.classList.remove("busy");
+      submitButton.textContent = idleLabel;
+      $("auth-toggle").disabled = false;
+      form.removeAttribute("aria-busy");
     }
   });
 
