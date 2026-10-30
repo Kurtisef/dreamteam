@@ -1,1 +1,9 @@
 .DS_Store
+
+# Local secrets and settings. Keep .env.example files shareable.
+.env
+.env.*
+!.env.example
+
+# Installed dependencies
+node_modules/
