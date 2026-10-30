@@ -112,6 +112,27 @@ p {
   font-weight: 600;
 }
 
+.tabs a {
+  display: block;
+  padding: 10px 16px;
+  color: #B9CBE6;
+  border-bottom: 3px solid transparent;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.tabs a[aria-current="page"] {
+  color: #fff;
+  border-bottom-color: #fff;
+}
+
+.tabs a:hover { color: #fff; }
+
+.tabs a:focus-visible {
+  outline: 3px solid #7FB2FF;
+  outline-offset: 2px;
+}
+
 #t-home:checked ~ .app label[for=t-home],
 #t-live:checked ~ .app label[for=t-live],
 #t-week:checked ~ .app label[for=t-week] {

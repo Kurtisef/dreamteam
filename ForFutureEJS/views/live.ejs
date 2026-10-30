@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BYU Gym Planner | Live feed</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Public+Sans:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<style>.screen { display: block; }</style>
+</head>
+<body>
+<input class="sr" type="radio" name="t" id="t-home" aria-label="Home">
+<input class="sr" type="radio" name="t" id="t-live" checked aria-label="Live feed">
+<input class="sr" type="radio" name="t" id="t-week" aria-label="Week view">
+<input class="sr" type="radio" name="t" id="t-plan" aria-label="Plan your visit">
+<input class="sr" type="radio" name="s" id="s-live" checked aria-label="Preview live data">
+<input class="sr" type="radio" name="s" id="s-closed" aria-label="Preview closed">
+<input class="sr" type="radio" name="s" id="s-off" aria-label="Preview sensors offline">
+
+<div class="app">
+<header class="top"><div class="in">
+  <h1>BYU Gym Planner</h1>
+  <p>Know before you go. For BYU students and faculty.</p>
+  <span id="auth-user" class="auth-user" aria-live="polite"><% if (typeof user !== 'undefined' && user) { %>Logged in as <%= user.display_name %><% } %></span>
+  <button id="auth-btn" class="auth-btn" type="button">Log in</button>
+  <nav class="tabs" aria-label="Screens">
+    <a href="/home">Home</a>
+    <a href="/live" aria-current="page">Live feed</a><a href="/week">Week view</a>
+    <a href="/plan">Plan visit</a>
+  </nav>
+</div></header>
+
+<main>
+  <div class="demo"><span>Preview a state:</span><label for="s-live">Live data</label><label for="s-closed">Closed</label><label for="s-off">Sensors offline</label></div>
+  <% const currentUser = typeof user !== 'undefined' ? user : null; %>
+<section class="screen live" aria-label="Live feed">
+  <div class="cams-h"><h2>Live feed</h2><p>See the gym right now: open equipment, line length, and the front door.</p></div>
+  <% if (!currentUser) { %>
+  <div class="card plan-gate" role="status">
+    <h3>Sign in to view the live camera feed</h3>
+    <p class="mute">You need to be signed in to view the gym cameras.</p>
+    <button type="button" class="btn-primary">Log in</button>
+  </div>
+  <% } else { %>
+  <div class="cams">
+      <figure class="cam">
+        <div class="feed">
+          <div class="feed-on"><div class="scene">Camera stream goes here</div><span class="badge">Live</span></div>
+          <div class="feed-off" role="status"><div class="spin"></div><b>Offline</b><span>Reconnecting to this camera.</span></div>
+        </div>
+        <figcaption><b>Weight floor</b><span>Inside angle 1: racks, benches, free weights</span></figcaption>
+      </figure>
+      <figure class="cam">
+        <div class="feed">
+          <div class="feed-on"><div class="scene">Camera stream goes here</div><span class="badge">Live</span></div>
+          <div class="feed-off" role="status"><div class="spin"></div><b>Offline</b><span>Reconnecting to this camera.</span></div>
+        </div>
+        <figcaption><b>Cardio deck</b><span>Inside angle 2: cardio and functional training</span></figcaption>
+      </figure>
+      <figure class="cam">
+        <div class="feed">
+          <div class="feed-on"><div class="scene">Camera stream goes here</div><span class="badge">Live</span></div>
+          <div class="feed-off" role="status"><div class="spin"></div><b>Offline</b><span>Reconnecting to this camera.</span></div>
+        </div>
+        <figcaption><b>Hallway and entrance</b><span>How long the line is outside</span></figcaption>
+      </figure>
+    </div>
+    <p class="note">On a slow connection, a feed that can't load shows Offline and the rest of the page keeps working.</p>
+  <% } %>
+</section>
+</main>
+</div>
+<!-- Future Node routes and page-specific authentication behavior are intentionally not wired here. -->
+</body>
+</html>

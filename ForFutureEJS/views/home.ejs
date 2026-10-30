@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BYU Gym Planner | Home</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Public+Sans:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<style>.screen { display: block; }</style>
+</head>
+<body>
+<input class="sr" type="radio" name="t" id="t-home" checked aria-label="Home">
+<input class="sr" type="radio" name="t" id="t-live" aria-label="Live feed">
+<input class="sr" type="radio" name="t" id="t-week" aria-label="Week view">
+<input class="sr" type="radio" name="t" id="t-plan" aria-label="Plan your visit">
+<input class="sr" type="radio" name="s" id="s-live" checked aria-label="Preview live data">
+<input class="sr" type="radio" name="s" id="s-closed" aria-label="Preview closed">
+<input class="sr" type="radio" name="s" id="s-off" aria-label="Preview sensors offline">
+
+<div class="app">
+<header class="top"><div class="in">
+  <h1>BYU Gym Planner</h1>
+  <p>Know before you go. For BYU students and faculty.</p>
+  <span id="auth-user" class="auth-user" aria-live="polite"><% if (typeof user !== 'undefined' && user) { %>Logged in as <%= user.display_name %><% } %></span>
+  <button id="auth-btn" class="auth-btn" type="button">Log in</button>
+  <nav class="tabs" aria-label="Screens">
+    <a href="/home" aria-current="page">Home</a>
+    <a href="/live">Live feed</a><a href="/week">Week view</a>
+    <a href="/plan">Plan visit</a>
+  </nav>
+</div></header>
+
+<main>
+  <div class="demo"><span>Preview a state:</span><label for="s-live">Live data</label><label for="s-closed">Closed</label><label for="s-off">Sensors offline</label></div>
+  <section class="screen home" aria-label="Home">
+    <div class="banner st-off" role="alert"><b>Live estimates are unavailable.</b> The gym's sensors aren't sending data right now. The forecast below comes from past weeks, not live counts.</div>
+    <div class="card hero">
+      <div>
+        <h2 class="verdict st-live">Go now. It gets busier until 7 PM.</h2>
+        <h2 class="verdict st-closed">The gym is closed right now.</h2>
+        <h2 class="verdict st-off">We can't read the gym right now.</h2>
+        <div class="gauge crowd-meter" role="img" aria-label="Crowd meter"><div class="arc"></div><div class="needle st-live"></div><div class="hub"></div></div>
+        <div class="ends"><span>Quiet</span><span>Packed</span></div>
+        <div class="read">
+          <div class="big st-live">62% full</div><p class="st-live">Moderately busy</p>
+          <div class="big st-closed">Closed</div><p class="st-closed">Reopens at 12 PM today. The gym is closed all day Sunday and Tuesday 11 AM to 12 PM.</p>
+          <div class="big st-off">Unavailable</div><p class="st-off">Check the Live feed to see the floor yourself.</p>
+        </div>
+      </div>
+      <div class="waits">
+        <div class="wait"><span class="k">Outside wait</span>
+          <span class="v st-live">6 min</span><span class="v st-closed">Closed</span><span class="v st-off">Unavailable</span>
+          <span class="d">Time to get into the building</span></div>
+        <div class="wait"><span class="k">Equipment wait</span>
+          <span class="v st-live">12 min</span><span class="v st-closed">Closed</span><span class="v st-off">Unavailable</span>
+          <span class="d">Time to get on machines or weights once inside</span></div>
+      </div>
+    </div>
+
+    <div class="card hourly">
+      <h2>Rest of today</h2>
+      <p class="mute">Expected fullness by hour. It peaks at 6 PM, then drops to 48% by 8 PM.</p>
+      <div class="bars" role="img" aria-label="Expected gym capacity by hour">
+        <div class="bar now mid capacity-now"><em>62%</em><i></i><b>Now</b></div>
+        <div class="bar hot capacity-5pm"><em>78%</em><i></i><b>5 PM</b></div>
+        <div class="bar hot capacity-6pm"><em>86%</em><i></i><b>6 PM</b></div>
+        <div class="bar mid capacity-7pm"><em>66%</em><i></i><b>7 PM</b></div>
+        <div class="bar mid capacity-8pm"><em>48%</em><i></i><b>8 PM</b></div>
+        <div class="bar go capacity-9pm"><em>30%</em><i></i><b>9 PM</b></div>
+      </div>
+    </div>
+  </section>
+</main>
+</div>
+<!-- Future Node routes and page-specific authentication behavior are intentionally not wired here. -->
+</body>
+</html>

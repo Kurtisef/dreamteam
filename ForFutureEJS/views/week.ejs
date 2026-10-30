@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BYU Gym Planner | Week view</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Public+Sans:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<style>.screen { display: block; }</style>
+</head>
+<body>
+<input class="sr" type="radio" name="t" id="t-home" aria-label="Home">
+<input class="sr" type="radio" name="t" id="t-live" aria-label="Live feed">
+<input class="sr" type="radio" name="t" id="t-week" checked aria-label="Week view">
+<input class="sr" type="radio" name="t" id="t-plan" aria-label="Plan your visit">
+<input class="sr" type="radio" name="s" id="s-live" checked aria-label="Preview live data">
+<input class="sr" type="radio" name="s" id="s-closed" aria-label="Preview closed">
+<input class="sr" type="radio" name="s" id="s-off" aria-label="Preview sensors offline">
+
+<div class="app">
+<header class="top"><div class="in">
+  <h1>BYU Gym Planner</h1>
+  <p>Know before you go. For BYU students and faculty.</p>
+  <span id="auth-user" class="auth-user" aria-live="polite"><% if (typeof user !== 'undefined' && user) { %>Logged in as <%= user.display_name %><% } %></span>
+  <button id="auth-btn" class="auth-btn" type="button">Log in</button>
+  <nav class="tabs" aria-label="Screens">
+    <a href="/home">Home</a>
+    <a href="/live">Live feed</a><a href="/week" aria-current="page">Week view</a>
+    <a href="/plan">Plan visit</a>
+  </nav>
+</div></header>
+
+<main>
+  <div class="demo"><span>Preview a state:</span><label for="s-live">Live data</label><label for="s-closed">Closed</label><label for="s-off">Sensors offline</label></div>
+  <section class="screen week" aria-label="Week view">
+    <h2>Week view</h2>
+    <p class="lead">Pick your quietest hour. Solid squares are what happened. Striped squares are predictions.</p>
+    <div class="tips">
+      <div class="tip"><b>Quietest</b>Fri 9 to 11 AM (predicted)</div>
+      <div class="tip"><b>Also quiet</b>Sat after 4 PM (predicted)</div>
+      <div class="tip t-hot"><b>Busiest</b>Mon to Wed, 5 to 7 PM</div>
+    </div>
+    <div class="card">
+      <div class="scroll">
+      <div class="heat" role="img" aria-label="Gym capacity by day and hour, Monday to Saturday">
+        <span></span>
+        <div class="dh"><b>Mon</b><small>Actual</small></div>
+        <div class="dh"><b>Tue</b><small>Actual</small></div>
+        <div class="dh"><b>Wed</b><small>Actual</small></div>
+        <div class="dh today"><b>Thu</b><small>Today</small></div>
+        <div class="dh"><b>Fri</b><small>Forecast</small></div>
+        <div class="dh"><b>Sat</b><small>Forecast</small></div>
+        <div class="dh"><b>Sun</b><small>Closed</small></div>
+        <div class="sun">Closed all day</div>
+
+        <span class="h">6 AM</span><i class="l3"></i><i class="l3"></i><i class="l3"></i><i class="l3"></i><i class="l2 p"></i><i class="l1 p"></i>
+        <span class="h">7 AM</span><i class="l3"></i><i class="l3"></i><i class="l3"></i><i class="l3"></i><i class="l2 p"></i><i class="l1 p"></i>
+        <span class="h">8 AM</span><i class="l2"></i><i class="l2"></i><i class="l2"></i><i class="l2"></i><i class="l2 p"></i><i class="l2 p"></i>
+        <span class="h">9 AM</span><i class="l2"></i><i class="l2"></i><i class="l2"></i><i class="l2"></i><i class="l1 p"></i><i class="l3 p"></i>
+        <span class="h">10 AM</span><i class="l2"></i><i class="l2"></i><i class="l2"></i><i class="l2"></i><i class="l1 p"></i><i class="l3 p"></i>
+        <span class="h">11 AM</span><i class="l3"></i><i class="x" title="Closed"></i><i class="l3"></i><i class="l3"></i><i class="l2 p"></i><i class="l3 p"></i>
+        <span class="h">12 PM</span><i class="l3"></i><i class="l3"></i><i class="l3"></i><i class="l3"></i><i class="l3 p"></i><i class="l2 p"></i>
+        <span class="h">1 PM</span><i class="l3"></i><i class="l3"></i><i class="l3"></i><i class="l2"></i><i class="l2 p"></i><i class="l2 p"></i>
+        <span class="h">2 PM</span><i class="l2"></i><i class="l2"></i><i class="l2"></i><i class="l2"></i><i class="l2 p"></i><i class="l2 p"></i>
+        <span class="h">3 PM</span><i class="l3"></i><i class="l3"></i><i class="l3"></i><i class="l3"></i><i class="l2 p"></i><i class="l2 p"></i>
+        <span class="h">4 PM</span><i class="l4"></i><i class="l4"></i><i class="l4"></i><i class="l4 p"></i><i class="l3 p"></i><i class="l2 p"></i>
+        <span class="h">5 PM</span><i class="l5"></i><i class="l5"></i><i class="l5"></i><i class="l5 p"></i><i class="l3 p"></i><i class="l2 p"></i>
+        <span class="h">6 PM</span><i class="l5"></i><i class="l4"></i><i class="l5"></i><i class="l4 p"></i><i class="l2 p"></i><i class="l1 p"></i>
+        <span class="h">7 PM</span><i class="l4"></i><i class="l3"></i><i class="l4"></i><i class="l3 p"></i><i class="l2 p"></i><i class="l1 p"></i>
+        <span class="h">8 PM</span><i class="l3"></i><i class="l2"></i><i class="l3"></i><i class="l2 p"></i><i class="l1 p"></i><i class="l1 p"></i>
+        <span class="h">9 PM</span><i class="l2"></i><i class="l1"></i><i class="l2"></i><i class="l1 p"></i><i class="l1 p"></i><i class="l1 p"></i>
+      </div>
+      </div>
+      <div class="legend">
+        <span><i class="l1"></i>Quiet</span><span><i class="l3"></i>Moderate</span><span><i class="l5"></i>Packed</span>
+        <span><i class="l3 p"></i>Predicted</span><span><i class="x"></i>Closed</span>
+      </div>
+      <p class="note">Sunday is left out on purpose: the gym is closed all day, so there is no data to show.</p>
+    </div>
+  </section>
+</main>
+</div>
+<!-- Future Node routes and page-specific authentication behavior are intentionally not wired here. -->
+</body>
+</html>
