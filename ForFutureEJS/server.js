@@ -53,7 +53,14 @@ if (require.main === module) {
     console.log(`BYU Gym Planner server listening on http://localhost:${port}`);
     if (!db) {
       console.log('DATABASE_URL is not set; database features are not connected.');
+      return;
     }
+
+    db.raw('select 1')
+      .then(() => console.log('Connected to the configured PostgreSQL database.'))
+      .catch((error) => {
+        console.error('Could not connect to the configured PostgreSQL database:', error.message);
+      });
   });
 }
 
