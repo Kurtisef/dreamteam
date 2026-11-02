@@ -21,21 +21,26 @@ npm start
 
 Then open [http://localhost:3000](http://localhost:3000) in a browser. The server uses port `3000` by default and honors the `PORT` environment variable if one is provided.
 
-## Supabase PostgreSQL connection
+## Supabase profile connection
 
-The server uses Knex and `pg` to connect directly to PostgreSQL when `DATABASE_URL` is set. Create a file named `.env` in this folder with this setting:
+The server uses Supabase's Data API to read and create rows in the `profiles` table. It does not connect directly to PostgreSQL. Configure these values in a private `.env` file in this folder:
 
 ```env
-DATABASE_URL=postgresql://...
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_replace_me
 ```
 
-Copy the PostgreSQL connection string from the Supabase dashboard's **Connect** panel. For a local network that cannot reach Supabase's direct IPv6 endpoint, use the **Session pooler** connection string. Replace its password placeholder with the database password; percent-encode reserved characters in the password if needed.
+Copy the project URL and publishable key from the Supabase dashboard. A publishable key is intended for app use; do not use a Supabase secret/service-role key here. The repository's `.gitignore` excludes `.env`.
 
-Keep `.env` private. The repository's `.gitignore` excludes it from Git. Do not put the database password in an EJS template or browser-side JavaScript. The Supabase project URL and publishable API key are not used for this Knex/PostgreSQL connection.
+The `profiles` table must allow the required `select` and `insert` operations through Supabase's Data API and its Row Level Security policies. The application sends the display name and email to Supabase when creating a profile, and looks for an exact match when logging in.
 
-When a database URL is present, the server runs a small `select 1` query at startup and logs whether it connected. If the URL is missing, the pages still render, but database features are not connected.
+## Profile login behavior
 
-## Pages and current status
+This version intentionally uses the simple profile lookup from the HTML site, not Supabase Auth. A profile consists of a display name and email; there is no password or email ownership check. After a match, Express stores the profile in a temporary in-memory session and sends the browser an HttpOnly session cookie. Sessions are cleared when the Node server restarts.
+
+Home and Week are public. Live and Plan show their sign-in gates to visitors. A profile whose database `role` is `admin` sees the admin-specific Plan message. The session comes from a profile lookup, so this is a prototype flow and must not be treated as verified identity for sensitive information.
+
+## Pages and files
 
 Express renders these EJS templates from `views/`:
 
@@ -43,11 +48,6 @@ Express renders these EJS templates from `views/`:
 - `/live` — Camera feed
 - `/week` — Week view
 - `/plan` — Plan visit
-
-The shared stylesheet is served from the project root. Authentication and page-specific database queries are not wired into this Node version yet; it currently renders each page as a visitor and only checks the database connection at startup.
-
-## Main files
-
-- `server.js` — Express routes, EJS setup, and optional Knex connection
-- `views/` — EJS page templates
-- `package.json` — Dependencies and the `npm start` script
+- `views/partials/auth-dialog.ejs` — Shared login/create-profile dialog
+- `public/auth.js` — Dialog, login, and logout controls
+- `server.js` — Express routes, Supabase Data API calls, and temporary profile sessions
