@@ -60,3 +60,8 @@
     window.history.replaceState({}, '', window.location.pathname);
   }
 })();
+
+if (dialog && loginButton?.dataset.loggedIn !== 'true') {
+  setMode('login');
+  dialog.showModal();
+}
