@@ -7,6 +7,8 @@
   const submit = document.getElementById('auth-submit');
   const toggle = document.getElementById('auth-toggle');
   const loginButton = document.getElementById('auth-btn');
+  const adminDialog = document.getElementById('admin-auth-dialog');
+  const adminMessage = document.getElementById('admin-auth-msg');
   if (!dialog || !form) return;
 
   function setMode(mode) {
@@ -47,6 +49,19 @@
   });
 
   document.getElementById('auth-close')?.addEventListener('click', () => dialog.close());
+  document.getElementById('admin-login-open')?.addEventListener('click', () => {
+    dialog.close();
+    if (adminMessage) {
+      adminMessage.textContent = '';
+      adminMessage.className = '';
+    }
+    adminDialog?.showModal();
+  });
+  document.getElementById('admin-auth-back')?.addEventListener('click', () => {
+    adminDialog?.close();
+    openDialog();
+  });
+  document.getElementById('admin-auth-close')?.addEventListener('click', () => adminDialog?.close());
   dialog.addEventListener('close', () => {
     form.reset();
     setMode('login');
@@ -59,9 +74,21 @@
     message.className = 'err';
     window.history.replaceState({}, '', window.location.pathname);
   }
+
+  const params = new URLSearchParams(window.location.search);
+  const adminError = params.get('adminAuthError');
+  const adminLoginRequired = params.get('adminLogin');
+  if (adminError || adminLoginRequired) {
+    adminDialog?.showModal();
+    if (adminMessage) {
+      adminMessage.textContent = adminError || 'Please log in with an administrator account.';
+      adminMessage.className = 'err';
+    }
+    window.history.replaceState({}, '', window.location.pathname);
+  } else if (loginButton?.dataset.loggedIn !== 'true') {
+    setMode('login');
+    if (!dialog.open) dialog.showModal();
+  }
+
 })();
 
-if (dialog && loginButton?.dataset.loggedIn !== 'true') {
-  setMode('login');
-  dialog.showModal();
-}

@@ -12,7 +12,24 @@
 
     <p id="auth-msg" role="status" aria-live="polite"></p>
     <button id="auth-submit" type="submit">Log in</button>
+    <button id="admin-login-open" type="button" class="link">Admin login</button>
     <button id="auth-toggle" type="button" class="link">New here? Create a profile</button>
     <button id="auth-close" type="button" class="link">Cancel</button>
+  </form>
+</dialog>
+
+<dialog id="admin-auth-dialog" class="auth-dialog" aria-labelledby="admin-auth-title">
+  <form action="/admin-login" method="post" novalidate>
+    <h2 id="admin-auth-title">Admin login</h2>
+    <label for="admin-email">Email</label>
+    <input id="admin-email" name="email" type="email" autocomplete="email" required>
+
+    <label for="admin-password">Password</label>
+    <input id="admin-password" name="password" type="password" autocomplete="current-password" required>
+
+    <p id="admin-auth-msg" role="status" aria-live="polite"></p>
+    <button type="submit">Log in as admin</button>
+    <button id="admin-auth-back" type="button" class="link">Back to regular login</button>
+    <button id="admin-auth-close" type="button" class="link">Cancel</button>
   </form>
 </dialog>

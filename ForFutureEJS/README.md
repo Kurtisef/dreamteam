@@ -28,15 +28,18 @@ The server uses Supabase's Data API to read and create rows in the `profiles` ta
 ```env
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_PUBLISHABLE_KEY=sb_publishable_replace_me
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 ```
 
-Copy the project URL and publishable key from the Supabase dashboard. A publishable key is intended for app use; do not use a Supabase secret/service-role key here. The repository's `.gitignore` excludes `.env`.
+Copy the project URL and publishable key from the Supabase dashboard. The admin login reads `email` and `desk_password` from `desk_staff` using the service-role key on the server. Keep that key private in `.env`; never put it in browser JavaScript or commit `.env`. The repository's `.gitignore` excludes `.env`.
 
 The `profiles` table must allow the required `select` and `insert` operations through Supabase's Data API and its Row Level Security policies. The application sends the display name and email to Supabase when creating a profile, and looks for an exact match when logging in.
 
 ## Profile login behavior
 
 This version intentionally uses the simple profile lookup from the HTML site, not Supabase Auth. A profile consists of a display name and email; there is no password or email ownership check. After a match, Express stores the profile in a temporary in-memory session and sends the browser an HttpOnly session cookie. Sessions are cleared when the Node server restarts.
+
+Admin login uses the email and password entered in the separate admin dialog to check a matching `email` and `desk_password` row in `desk_staff`. The server creates an admin session only after both values match. The `desk_password` column is currently compared as stored, so it should contain a securely hashed password before this is used beyond a prototype.
 
 Home and Week are public. Live and Plan show their sign-in gates to visitors. A profile whose database `role` is `admin` sees the admin-specific Plan message. The session comes from a profile lookup, so this is a prototype flow and must not be treated as verified identity for sensitive information.
 

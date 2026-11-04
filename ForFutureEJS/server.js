@@ -6,6 +6,7 @@ const app = express();
 const port = Number(process.env.PORT) || 3000;
 const supabaseUrl = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 const SESSION_COOKIE = 'gym_profile_session';
 const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
@@ -54,6 +55,69 @@ async function requestProfiles({ method = 'GET', filters = {}, body } = {}) {
   return result;
 }
 
+async function requestDeskStaffByEmail(email) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Admin database access is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.');
+  }
+
+  const url = new URL(`${supabaseUrl}/rest/v1/desk_staff`);
+  url.searchParams.set('select', 'desk_id,email,desk_password');
+  url.searchParams.set('email', `eq.${email}`);
+  url.searchParams.set('limit', '1');
+
+  const response = await fetch(url, {
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    },
+  });
+  const responseText = await response.text();
+  let result;
+  try {
+    result = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    result = null;
+  }
+
+  if (!response.ok) {
+    const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
+    throw new Error(message);
+  }
+  return Array.isArray(result) ? result[0] : null;
+}
+
+async function insertTrafficEvent({ deskId, eventType, waitTimeMin }) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Admin database access is not configured.');
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/traffic_events`, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({
+      desk_id: deskId,
+      event_type: eventType,
+      wait_time_min: waitTimeMin,
+    }),
+  });
+
+  if (!response.ok) {
+    const responseText = await response.text();
+    let result;
+    try {
+      result = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      result = null;
+    }
+    throw new Error(result?.message || result?.hint || `Supabase insert failed (${response.status}).`);
+  }
+}
+
 function getCookie(req, name) {
   const cookieHeader = req.headers.cookie || '';
   for (const item of cookieHeader.split(';')) {
@@ -94,6 +158,14 @@ function attachProfile(req, res, next) {
 }
 
 app.use(attachProfile);
+
+app.use((req, res, next) => {
+  const adminRestrictedPaths = ['/live', '/week', '/plan'];
+  if (req.profile?.role === 'admin' && adminRestrictedPaths.includes(req.path)) {
+    return res.redirect('/home');
+  }
+  next();
+});
 
 function safeReturnPath(value) {
   return ['/', '/home', '/live', '/week', '/plan'].includes(value) ? value : '/home';
@@ -150,6 +222,64 @@ app.post('/login', async (req, res) => {
   }
 });
 
+app.post('/admin-login', async (req, res) => {
+  const email = typeof req.body.email === 'string' ? req.body.email.trim() : '';
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+
+  if (!email || !password) {
+    return res.redirect(`/home?adminAuthError=${encodeURIComponent('Enter your admin email and password.')}`);
+  }
+
+  try {
+    const staff = await requestDeskStaffByEmail(email);
+    if (!staff || staff.email !== email || staff.desk_password !== password) {
+      return res.redirect(`/home?adminAuthError=${encodeURIComponent('The admin email or password is incorrect.')}`);
+    }
+    if (!staff.desk_id) throw new Error('The desk_staff record is missing desk_id.');
+
+    const sessionId = crypto.randomBytes(32).toString('hex');
+    const user = {
+      profile_id: null,
+      display_name: 'Admin',
+      email: staff.email,
+      desk_id: staff.desk_id,
+      role: 'admin',
+    };
+    profileSessions.set(sessionId, { profile: user, expiresAt: Date.now() + SESSION_LIFETIME_MS });
+    setSessionCookie(res, sessionId);
+    return res.redirect('/admin');
+  } catch (error) {
+    console.error('Admin login failed:', error);
+    return res.redirect(`/home?adminAuthError=${encodeURIComponent('Could not check admin credentials. Please try again.')}`);
+  }
+});
+
+app.post('/admin/events', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+
+  const eventType = req.body.event_type;
+  const waitTimeMin = req.body.wait_time_min;
+  if (!['in', 'out'].includes(eventType)) {
+    return res.status(400).json({ error: 'Event type must be in or out.' });
+  }
+  if (eventType === 'in' && waitTimeMin !== null && (!Number.isInteger(waitTimeMin) || waitTimeMin < 1)) {
+    return res.status(400).json({ error: 'Wait time must be a whole number of at least 1 minute, or null.' });
+  }
+
+  try {
+    await insertTrafficEvent({
+      deskId: req.profile.desk_id,
+      eventType,
+      waitTimeMin: eventType === 'in' ? waitTimeMin : null,
+    });
+    return res.status(201).json({ ok: true });
+  } catch (error) {
+    console.error('Traffic event insert failed:', error);
+    return res.status(500).json({ error: 'Could not save the traffic event.' });
+  }
+});
+
 app.post('/logout', (req, res) => {
   const sessionId = getCookie(req, SESSION_COOKIE);
   if (sessionId) profileSessions.delete(sessionId);
@@ -162,6 +292,10 @@ app.get('/styles.css', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'styles.css'));
 });
 
+app.get('/admin.css', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'admin.css'));
+});
+
 function renderPage(view) {
   return (req, res) => res.render(view, { user: req.profile, currentPath: req.path });
 }
@@ -171,6 +305,11 @@ app.get('/home', renderPage('home'));
 app.get('/live', renderPage('live'));
 app.get('/week', renderPage('week'));
 app.get('/plan', renderPage('plan'));
+app.get('/admin', (req, res) => {
+  if (!req.profile) return res.redirect('/home?adminLogin=required');
+  if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
+  return res.render('admin', { user: req.profile, currentPath: req.path });
+});
 
 app.use((req, res) => {
   res.status(404).send('Page not found.');

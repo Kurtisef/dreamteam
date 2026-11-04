@@ -27,8 +27,12 @@
   <button id="auth-btn" class="auth-btn" data-logged-in="<%= user ? 'true' : 'false' %>" type="button"><%= user ? 'Log out' : 'Log in' %></button>
   <nav class="tabs" aria-label="Screens">
     <a href="/home" aria-current="page">Home</a>
+    <% if (user && user.role === 'admin') { %>
+    <a href="/admin">Admin</a>
+    <% } else { %>
     <a href="/live">Live feed</a><a href="/week">Week view</a>
     <a href="/plan">Plan visit</a>
+    <% } %>
   </nav>
 </div></header>
 
