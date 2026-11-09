@@ -121,6 +121,12 @@ p {
   text-decoration: none;
 }
 
+.tabs label[for="t-home"],
+.tabs a[href="/home"] {
+  background-color: rgba(255, 255, 255, 0.1); 
+  border-radius: 8px;
+}
+
 .tabs a[aria-current="page"] {
   color: #fff;
   border-bottom-color: #fff;
@@ -331,6 +337,15 @@ main {
   margin: 2px auto 0;
 }
 
+.capacity-count,
+.capacity-updated {
+  font-size: .85rem;
+}
+
+.capacity-updated {
+  margin-top: 6px !important;
+}
+
 .waits {
   display: grid;
   gap: 14px;
@@ -343,6 +358,10 @@ main {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 16px 18px;
+}
+
+.wait[hidden] {
+  display: none;
 }
 
 .wait .k {
@@ -375,21 +394,33 @@ main {
   margin: 4px 0 18px;
 }
 
+.hour-picker-label,
+.hour-picker {
+  display: none;
+}
+
+.hour-picker[hidden] {
+  display: none;
+}
+
 .bars {
   display: flex;
   align-items: flex-end;
-  gap: 10px;
+  gap: clamp(1px, 1vw, 10px);
   min-height: 190px;
+  width: 100%;
 }
 
 .bar {
   display: flex;
-  flex: 1;
+  box-sizing: border-box;
+  flex: 1 1 0;
+  min-width: 0;
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  font-size: .85rem;
+  font-size: clamp(.55rem, 1.2vw, .85rem);
 }
 
 .bar i {
@@ -400,20 +431,29 @@ main {
   border-radius: 6px 6px 2px 2px;
 }
 
-.capacity-now { --p: 62; }
-.capacity-5pm { --p: 78; }
-.capacity-6pm { --p: 86; }
-.capacity-7pm { --p: 66; }
-.capacity-8pm { --p: 48; }
-.capacity-9pm { --p: 30; }
-
 .bar.go i { background: var(--go); }
 .bar.mid i { background: var(--mid); }
 .bar.hot i { background: var(--hot); }
+.bar.closed i {
+  height: 12px;
+  background: var(--line);
+}
+.bar.now {
+  padding: 4px 2px;
+  border: 2px solid #7FB2FF;
+  border-radius: 8px;
+}
+.chart-empty {
+  align-self: center;
+  color: var(--mute);
+  font-size: .9rem;
+}
 
 .bar em {
   font-style: normal;
   font-weight: 600;
+  font-size: clamp(.5rem, 1vw, .85rem);
+  white-space: nowrap;
 }
 
 .bar.now b {
@@ -679,7 +719,37 @@ main {
 @media (max-width: 720px) {
   .hero { grid-template-columns: 1fr; }
   .verdict { font-size: 2rem; }
-  .bars { gap: 6px; }
+  .hour-picker-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: .85rem;
+    font-weight: 600;
+  }
+  .hour-picker {
+    display: block;
+    width: 100%;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 600 1rem "Public Sans", system-ui, sans-serif;
+  }
+  .hour-picker:focus-visible {
+    outline: 3px solid #7FB2FF;
+    outline-offset: 2px;
+  }
+  .bars { min-height: 190px; }
+  .bar {
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 180px;
+    margin: 0 auto;
+    font-size: .9rem;
+  }
+  .bar em { display: block; font-size: .9rem; }
+  .bar i { max-width: 100%; }
 }
 
 /* Login button in the header */
