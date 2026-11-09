@@ -124,6 +124,35 @@ async function requestPlannedVisits({ profileId, method = 'GET', date, visitId, 
   return result;
 }
 
+async function requestAtomicPlannedVisit(body) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Planned visit database access is not configured.');
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/rpc/reserve_planned_visit_atomic`, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ p_visit: body }),
+  });
+  const responseText = await response.text();
+  let result;
+  try {
+    result = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    result = null;
+  }
+
+  if (!response.ok) {
+    const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
+    throw new Error(message);
+  }
+  return result;
+}
+
 function getGymClockParts() {
   const timeZone = process.env.GYM_TIME_ZONE || 'America/Denver';
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -810,56 +839,31 @@ app.post('/plan/visits', async (req, res) => {
   }
 
   try {
-    const dailyVisits = await requestPlannedVisits({
-      profileId: profile.profile_id,
-      date: reservation.date,
+    const result = await requestAtomicPlannedVisit({
+      profile_id: profile.profile_id,
+      intended_arrival: reservation.intended_arrival,
+      exit_time: reservation.exit_time,
+      ...reservation.equipment,
     });
-    const reservationsForDate = Array.isArray(dailyVisits) ? dailyVisits : [];
-    const newStart = Date.parse(`${reservation.intended_arrival}Z`);
-    const newEnd = Date.parse(`${reservation.exit_time}Z`);
-    const overlappingVisit = reservationsForDate.some((visit) => {
-      const existingStart = Date.parse(`${String(visit.intended_arrival).replace(' ', 'T')}Z`);
-      const existingEnd = Date.parse(`${String(visit.exit_time).replace(' ', 'T')}Z`);
-      return Number.isFinite(existingStart)
-        && Number.isFinite(existingEnd)
-        && newStart < existingEnd
-        && newEnd > existingStart;
-    });
-    if (overlappingVisit) {
+    if (result?.status === 'overlap') {
       return res.status(409).json({
         error: 'This time overlaps one of your existing reservations. Choose a different time.',
       });
     }
-
-    const usedMinutes = reservationsForDate.reduce((total, visit) => {
-      const start = Date.parse(`${String(visit.intended_arrival).replace(' ', 'T')}Z`);
-      const end = Date.parse(`${String(visit.exit_time).replace(' ', 'T')}Z`);
-      return Number.isFinite(start) && Number.isFinite(end)
-        ? total + Math.round((end - start) / 60000)
-        : total;
-    }, 0);
-    if (usedMinutes + reservation.duration > 120) {
-      const remaining = Math.max(0, 120 - usedMinutes);
+    if (result?.status === 'daily_limit') {
+      const remaining = Number.isInteger(result.remaining_minutes)
+        ? result.remaining_minutes
+        : 0;
       return res.status(400).json({
         error: `Daily limit is 2 hours (120 min). You have ${remaining} min remaining for ${reservation.date}.`,
       });
     }
-
-    const rows = await requestPlannedVisits({
-      profileId: profile.profile_id,
-      method: 'POST',
-      body: {
-        profile_id: profile.profile_id,
-        intended_arrival: reservation.intended_arrival,
-        exit_time: reservation.exit_time,
-        ...reservation.equipment,
-      },
-    });
-    const visit = Array.isArray(rows) ? rows[0] : null;
-    if (!visit) throw new Error('Supabase did not return the planned visit.');
-    return res.status(201).json({ visit });
+    if (result?.status !== 'saved' || !result.visit) {
+      throw new Error('Supabase did not confirm the planned visit.');
+    }
+    return res.status(201).json({ visit: result.visit });
   } catch (error) {
-    console.error('Planned visit insert failed:', error);
+    console.error('Atomic planned visit reservation failed:', error);
     return res.status(500).json({ error: 'Could not save your reservation. Please try again.' });
   }
 });
