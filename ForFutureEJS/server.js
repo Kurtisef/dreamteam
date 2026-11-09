@@ -940,7 +940,11 @@ app.get('/admin.css', (req, res) => {
 });
 
 function renderPage(view) {
-  return (req, res) => res.render(view, { user: req.profile, currentPath: req.path });
+  return (req, res) => res.render(view, {
+    user: req.profile,
+    currentPath: req.path,
+    gymTimeZone: process.env.GYM_TIME_ZONE || 'America/Denver',
+  });
 }
 
 app.get('/', renderPage('home'));
