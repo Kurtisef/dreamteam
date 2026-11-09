@@ -175,7 +175,7 @@ function parsePlannedVisitInput(body) {
   }
 
   const [startHour, startMinute] = time.split(':').map(Number);
-  if (startMinute !== 0) throw new Error('Choose a start time on the hour.');
+  if (startMinute % 30 !== 0) throw new Error('Choose a start time in 30-minute increments.');
   const startMs = Date.parse(`${date}T${time}:00Z`);
   const nowMs = Date.UTC(
     gymNow.year,

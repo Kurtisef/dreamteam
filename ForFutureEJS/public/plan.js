@@ -6,10 +6,15 @@
   const timeInput = document.getElementById('plan-time');
   const durationInput = document.getElementById('plan-duration');
   const message = document.getElementById('plan-msg');
+  const scheduleMessage = document.getElementById('plan-schedule');
   const list = document.getElementById('plan-list');
   const quotaBadge = document.getElementById('daily-quota-badge');
   const submitButton = document.getElementById('plan-submit');
   const visits = [];
+  let scheduleIntervals = [];
+  let scheduleReady = false;
+  let scheduleLoading = false;
+  let scheduleRequest = 0;
   const equipmentColumns = [
     ['Racks', 'racks'],
     ['Dumbbells', 'dumbbells'],
@@ -73,6 +78,119 @@
     const selectedDate = dateInput.value;
     if (!selectedDate) return;
     quotaBadge.textContent = `${bookedMinutes(selectedDate)} / 120 min booked on ${selectedDate}`;
+  }
+
+  function parseScheduleTime(value) {
+    const match = String(value || '').match(/^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d(?:\.\d+)?)?$/);
+    return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+  }
+
+  function scheduleIntervalsFromRows(rows) {
+    const intervals = rows.flatMap((row) => {
+      if (row.is_closed_all_day === true) return [];
+      const start = parseScheduleTime(row.open_time);
+      let end = parseScheduleTime(row.close_time);
+      if (start === null || end === null) return [];
+      if (end === 0 && start > 0) end = 1440;
+      else if (end <= start) end += 1440;
+      return [{ start, end }];
+    }).sort((a, b) => a.start - b.start);
+
+    const merged = [];
+    intervals.forEach((interval) => {
+      const previous = merged[merged.length - 1];
+      if (previous && interval.start <= previous.end) {
+        previous.end = Math.max(previous.end, interval.end);
+      } else {
+        merged.push({ ...interval });
+      }
+    });
+    return merged;
+  }
+
+  function formatScheduleTime(minutes) {
+    const date = new Date(2000, 0, 1, Math.floor(minutes / 60) % 24, minutes % 60);
+    return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
+  function updateAvailableTimes() {
+    const duration = Number(durationInput.value);
+    const previousValue = timeInput.value;
+    const availableStarts = [];
+    scheduleIntervals.forEach((interval) => {
+      for (let start = 0; start < 1440; start += 30) {
+        if (start >= interval.start && start + duration <= interval.end && start + duration <= 1440) {
+          availableStarts.push(start);
+        }
+      }
+    });
+
+    const uniqueStarts = [...new Set(availableStarts)].sort((a, b) => a - b);
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = !scheduleReady && scheduleLoading
+      ? 'Loading schedule…'
+      : uniqueStarts.length ? 'Choose a start time' : 'No times available';
+    timeInput.replaceChildren(placeholder);
+    uniqueStarts.forEach((minutes) => {
+      const option = document.createElement('option');
+      option.value = `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+      option.textContent = formatScheduleTime(minutes);
+      timeInput.append(option);
+    });
+    if (uniqueStarts.some((minutes) => {
+      const value = `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+      return value === previousValue;
+    })) {
+      timeInput.value = previousValue;
+    }
+    submitButton.disabled = !scheduleReady || uniqueStarts.length === 0;
+  }
+
+  async function loadSchedule() {
+    const requestId = ++scheduleRequest;
+    const date = dateInput.value;
+    scheduleReady = false;
+    scheduleLoading = true;
+    scheduleIntervals = [];
+    scheduleMessage.textContent = 'Loading this date’s schedule…';
+    updateAvailableTimes();
+
+    const dateParts = date.split('-').map(Number);
+    const dayOfWeek = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2])).getUTCDay();
+    try {
+      const rows = await readResponse(await fetch(
+        `/operating-hours?day_of_week=${dayOfWeek}&date=${encodeURIComponent(date)}`,
+        { credentials: 'same-origin', cache: 'no-store' }
+      ));
+      if (requestId !== scheduleRequest) return;
+      if (!Array.isArray(rows)) throw new Error('The schedule response was invalid.');
+
+      scheduleIntervals = scheduleIntervalsFromRows(rows);
+      scheduleReady = true;
+      scheduleLoading = false;
+      const reasons = [...new Set(rows.map((row) => String(row.reason || '').trim()).filter(Boolean))];
+      if (!scheduleIntervals.length) {
+        if (rows.length && rows.every((row) => row.is_closed_all_day === true)) {
+          scheduleMessage.textContent = `The gym is closed all day${reasons.length ? `: ${reasons.join('; ')}` : ''}.`;
+        } else if (!rows.length) {
+          scheduleMessage.textContent = 'No operating hours are configured for this date.';
+        } else {
+          scheduleMessage.textContent = 'The schedule for this date is unavailable.';
+        }
+      } else if (reasons.length) {
+        scheduleMessage.textContent = `Schedule exception: ${reasons.join('; ')}. Available start times are shown below.`;
+      } else {
+        scheduleMessage.textContent = `Gym hours: ${scheduleIntervals.map((interval) => `${formatScheduleTime(interval.start)}–${formatScheduleTime(interval.end)}`).join(', ')}.`;
+      }
+      updateAvailableTimes();
+    } catch (error) {
+      if (requestId !== scheduleRequest) return;
+      scheduleMessage.textContent = error.message || 'Could not load this date’s schedule.';
+      scheduleReady = false;
+      scheduleLoading = false;
+      updateAvailableTimes();
+    }
   }
 
   function makeVisitElement(visit) {
@@ -147,6 +265,11 @@
     event.preventDefault();
     showMessage('');
 
+    if (!scheduleReady || !timeInput.value) {
+      showMessage('Choose a start time from the available times for this date.', true);
+      return;
+    }
+
     const equipment = Array.from(form.querySelectorAll('input[name="equipment"]:checked'))
       .map((checkbox) => checkbox.value);
     if (!equipment.length) {
@@ -176,8 +299,8 @@
     } catch (error) {
       showMessage(error.message || 'Could not save your reservation.', true);
     } finally {
-      submitButton.disabled = false;
       submitButton.textContent = originalText;
+      updateAvailableTimes();
     }
   });
 
@@ -202,8 +325,12 @@
   dateInput.addEventListener('change', () => {
     showMessage('');
     updateQuota();
+    loadSchedule();
   });
 
+  durationInput.addEventListener('change', updateAvailableTimes);
+
   setDateBounds();
+  loadSchedule();
   loadVisits();
 })();

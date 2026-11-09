@@ -15,9 +15,6 @@
 <input class="sr" type="radio" name="t" id="t-live" aria-label="Live feed">
 <input class="sr" type="radio" name="t" id="t-week" aria-label="Week view">
 <input class="sr" type="radio" name="t" id="t-plan" checked aria-label="Plan your visit">
-<input class="sr" type="radio" name="s" id="s-live" checked aria-label="Preview live data">
-<input class="sr" type="radio" name="s" id="s-closed" aria-label="Preview closed">
-<input class="sr" type="radio" name="s" id="s-off" aria-label="Preview sensors offline">
 
 <div class="app">
 <header class="top"><div class="in">
@@ -33,7 +30,6 @@
 </div></header>
 
 <main>
-  <div class="demo"><span>Preview a state:</span><label for="s-live">Live data</label><label for="s-closed">Closed</label><label for="s-off">Sensors offline</label></div>
   <% const currentUser = typeof user !== 'undefined' ? user : null; %>
 <section class="screen plan" aria-label="Plan a visit">
   <h2>Plan a visit</h2>
@@ -62,22 +58,7 @@
           <div class="field">
             <label for="plan-time">Start time</label>
             <select id="plan-time" required>
-              <option value="06:00">6:00 AM</option>
-              <option value="07:00">7:00 AM</option>
-              <option value="08:00">8:00 AM</option>
-              <option value="09:00">9:00 AM</option>
-              <option value="10:00">10:00 AM</option>
-              <option value="11:00">11:00 AM</option>
-              <option value="12:00">12:00 PM</option>
-              <option value="13:00">1:00 PM</option>
-              <option value="14:00">2:00 PM</option>
-              <option value="15:00">3:00 PM</option>
-              <option value="16:00">4:00 PM</option>
-              <option value="17:00">5:00 PM</option>
-              <option value="18:00">6:00 PM</option>
-              <option value="19:00">7:00 PM</option>
-              <option value="20:00">8:00 PM</option>
-              <option value="21:00">9:00 PM</option>
+              <option value="">Choose a date first</option>
             </select>
           </div>
           <div class="field">
@@ -90,6 +71,8 @@
             </select>
           </div>
         </div>
+
+        <p id="plan-schedule" class="mute" role="status" aria-live="polite">Loading schedule…</p>
 
         <fieldset class="equip-group">
           <legend>Intended equipment <span class="mute">(select at least one)</span></legend>
