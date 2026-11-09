@@ -31,14 +31,41 @@
   }
 
   function setDateBounds() {
-    const now = new Date();
-    const maxDate = new Date(now);
-    maxDate.setDate(now.getDate() + 7);
-    dateInput.min = localDateString(now);
-    dateInput.max = localDateString(maxDate);
+    const gymNow = getGymClockParts();
+    const today = gymNow.date;
+    const tomorrow = addCalendarDays(today, 1);
+    const maxDate = addCalendarDays(today, 7);
+    const firstBookableDate = gymNow.hour >= 22 ? tomorrow : today;
+    dateInput.min = firstBookableDate;
+    dateInput.max = maxDate;
     if (!dateInput.value || dateInput.value < dateInput.min || dateInput.value > dateInput.max) {
-      dateInput.value = dateInput.min;
+      dateInput.value = firstBookableDate;
     }
+  }
+
+  function getGymClockParts(now = new Date()) {
+    const timeZone = dateInput.dataset.gymTimeZone || 'America/Denver';
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(now);
+    const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+    return {
+      date: `${values.year}-${values.month}-${values.day}`,
+      hour: Number(values.hour),
+      minute: Number(values.minute),
+    };
+  }
+
+  function addCalendarDays(date, days) {
+    const next = new Date(`${date}T00:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + days);
+    return next.toISOString().slice(0, 10);
   }
 
   function showMessage(text, isError = false) {
@@ -116,9 +143,11 @@
   function updateAvailableTimes() {
     const duration = Number(durationInput.value);
     const previousValue = timeInput.value;
+    const gymNow = getGymClockParts();
     const availableStarts = [];
     scheduleIntervals.forEach((interval) => {
       for (let start = 0; start < 1440; start += 30) {
+        if (dateInput.value === gymNow.date && start <= gymNow.hour * 60 + gymNow.minute) continue;
         if (start >= interval.start && start + duration <= interval.end && start + duration <= 1440) {
           availableStarts.push(start);
         }
@@ -333,4 +362,14 @@
   setDateBounds();
   loadSchedule();
   loadVisits();
+  window.setInterval(() => {
+    const previousDate = dateInput.value;
+    setDateBounds();
+    if (dateInput.value !== previousDate) {
+      updateQuota();
+      loadSchedule();
+    } else {
+      updateAvailableTimes();
+    }
+  }, 60 * 1000);
 })();
