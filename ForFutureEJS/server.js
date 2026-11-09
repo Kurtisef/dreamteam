@@ -118,6 +118,248 @@ async function insertTrafficEvent({ deskId, eventType, waitTimeMin }) {
   }
 }
 
+async function requestTrafficEvents() {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Admin database access is not configured.');
+  }
+
+  const pageSize = 1000;
+  const events = [];
+  for (let start = 0; ; start += pageSize) {
+    const url = new URL(`${supabaseUrl}/rest/v1/traffic_events`);
+    url.searchParams.set('select', 'event_type,wait_time_min,created_at');
+    url.searchParams.set('order', 'created_at.desc');
+
+    const response = await fetch(url, {
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `******`,
+        Prefer: 'count=exact',
+        'Range-Unit': 'items',
+        Range: `${start}-${start + pageSize - 1}`,
+      },
+    });
+    const responseText = await response.text();
+    let result;
+    try {
+      result = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      result = null;
+    }
+
+    if (!response.ok) {
+      const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
+      throw new Error(message);
+    }
+    if (!Array.isArray(result)) {
+      throw new Error('Supabase returned an invalid traffic event list.');
+    }
+
+    events.push(...result);
+    const contentRange = response.headers.get('content-range');
+    const total = contentRange && Number(contentRange.split('/')[1]);
+    if (result.length < pageSize || (Number.isFinite(total) && events.length >= total)) break;
+  }
+
+  const insideCount = events.reduce((count, event) => {
+    if (event.event_type === 'in') return count + 1;
+    if (event.event_type === 'out') return count - 1;
+    return count;
+  }, 0);
+
+  return { events, insideCount };
+}
+
+async function requestOperatingHours(dayOfWeek, date) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Admin database access is not configured.');
+  }
+
+  const url = new URL(`${supabaseUrl}/rest/v1/operating_hours`);
+  url.searchParams.set('select', 'schedule_id,day_of_week,open_time,close_time,is_closed_all_day');
+  url.searchParams.set('day_of_week', `eq.${dayOfWeek}`);
+  url.searchParams.set('order', 'open_time.asc');
+
+  const response = await fetch(url, {
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `******`,
+    },
+  });
+  const responseText = await response.text();
+  let result;
+  try {
+    result = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    result = null;
+  }
+
+  if (!response.ok) {
+    const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
+    throw new Error(message);
+  }
+  if (!Array.isArray(result)) {
+    throw new Error('Supabase returned an invalid operating-hours list.');
+  }
+
+  const exceptionsUrl = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+  exceptionsUrl.searchParams.set(
+    'select',
+    'schedule_id,start_time,end_time,reason,is_closed_all_day'
+  );
+  exceptionsUrl.searchParams.set('exception_date', `eq.${date}`);
+  const exceptionsResponse = await fetch(exceptionsUrl, {
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `******`,
+    },
+  });
+  const exceptionsText = await exceptionsResponse.text();
+  let exceptions;
+  try {
+    exceptions = exceptionsText ? JSON.parse(exceptionsText) : null;
+  } catch {
+    exceptions = null;
+  }
+
+  if (!exceptionsResponse.ok) {
+    const message = exceptions?.message || exceptions?.hint || `Supabase request failed (${exceptionsResponse.status}).`;
+    throw new Error(message);
+  }
+  if (!Array.isArray(exceptions)) {
+    throw new Error('Supabase returned an invalid schedule exception list.');
+  }
+  if (!exceptions.length) return result;
+
+  const exceptionsBySchedule = new Map();
+  for (const exception of exceptions) {
+    const entries = exceptionsBySchedule.get(exception.schedule_id) || [];
+    entries.push(exception);
+    exceptionsBySchedule.set(exception.schedule_id, entries);
+  }
+
+  return result.flatMap((schedule) => {
+    const overrides = exceptionsBySchedule.get(schedule.schedule_id);
+    if (!overrides) return [schedule];
+    return overrides.map((exception) => ({
+      ...schedule,
+      open_time: exception.start_time,
+      close_time: exception.end_time,
+      reason: exception.reason,
+      is_closed_all_day: exception.is_closed_all_day,
+    }));
+  });
+}
+
+async function requestLatestCapacityLog() {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Capacity data access is not configured.');
+  }
+
+  const url = new URL(`${supabaseUrl}/rest/v1/capacity_logs`);
+  url.searchParams.set(
+    'select',
+    'current_headcount,capacity_percentage,outside_wait_mins,equipment_wait_mins,recorded_at'
+  );
+  url.searchParams.set('order', 'recorded_at.desc');
+  url.searchParams.set('limit', '1');
+
+  const response = await fetch(url, {
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `******`,
+    },
+  });
+  const responseText = await response.text();
+  let result;
+  try {
+    result = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    result = null;
+  }
+
+  if (!response.ok) {
+    const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
+    throw new Error(message);
+  }
+  if (!Array.isArray(result)) {
+    throw new Error('Supabase returned an invalid capacity log list.');
+  }
+  return result[0] || null;
+}
+
+function getMaximumCapacity() {
+  const maximumCapacity = process.env.GYM_MAX_CAPACITY === undefined
+    ? 135
+    : Number(process.env.GYM_MAX_CAPACITY);
+  if (!Number.isSafeInteger(maximumCapacity) || maximumCapacity <= 0) {
+    throw new Error('GYM_MAX_CAPACITY must be a positive whole number.');
+  }
+  return maximumCapacity;
+}
+
+async function deleteTrafficEvents() {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Admin database access is not configured.');
+  }
+
+  const url = new URL(`${supabaseUrl}/rest/v1/traffic_events`);
+  url.searchParams.set('event_type', 'not.is.null');
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `******`,
+      Prefer: 'return=minimal',
+    },
+  });
+
+  if (!response.ok) {
+    const responseText = await response.text();
+    let result;
+    try {
+      result = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      result = null;
+    }
+    throw new Error(result?.message || result?.hint || `Supabase delete failed (${response.status}).`);
+  }
+}
+
+async function insertCapacityResetLog() {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Capacity data access is not configured.');
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/capacity_logs`, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `******`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({
+      recorded_at: new Date().toISOString().replace('Z', ''),
+      capacity_percentage: 0,
+      outside_wait_mins: 0,
+      equipment_wait_mins: 0,
+      current_headcount: 0,
+    }),
+  });
+
+  if (!response.ok) {
+    const responseText = await response.text();
+    let result;
+    try {
+      result = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      result = null;
+    }
+    throw new Error(result?.message || result?.hint || `Supabase insert failed (${response.status}).`);
+  }
+}
+
 function getCookie(req, name) {
   const cookieHeader = req.headers.cookie || '';
   for (const item of cookieHeader.split(';')) {
@@ -263,8 +505,12 @@ app.post('/admin/events', async (req, res) => {
   if (!['in', 'out'].includes(eventType)) {
     return res.status(400).json({ error: 'Event type must be in or out.' });
   }
-  if (eventType === 'in' && waitTimeMin !== null && (!Number.isInteger(waitTimeMin) || waitTimeMin < 1)) {
-    return res.status(400).json({ error: 'Wait time must be a whole number of at least 1 minute, or null.' });
+  if (
+    eventType === 'in'
+    && waitTimeMin !== null
+    && (!Number.isInteger(waitTimeMin) || waitTimeMin < 0 || waitTimeMin > 59)
+  ) {
+    return res.status(400).json({ error: 'Wait time must be null or a whole number from 0 to 59 minutes.' });
   }
 
   try {
@@ -277,6 +523,75 @@ app.post('/admin/events', async (req, res) => {
   } catch (error) {
     console.error('Traffic event insert failed:', error);
     return res.status(500).json({ error: 'Could not save the traffic event.' });
+  }
+});
+
+app.get('/admin/events', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+
+  try {
+    return res.json(await requestTrafficEvents());
+  } catch (error) {
+    console.error('Traffic events fetch failed:', error);
+    return res.status(500).json({ error: 'Could not load gym activity.' });
+  }
+});
+
+app.post('/admin/close', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+
+  try {
+    await deleteTrafficEvents();
+    await insertCapacityResetLog();
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Traffic events clear failed:', error);
+    return res.status(500).json({ error: 'Could not close the gym and clear activity.' });
+  }
+});
+
+app.get('/operating-hours', async (req, res) => {
+  const dayOfWeek = Number(req.query.day_of_week);
+  const date = typeof req.query.date === 'string' ? req.query.date : '';
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+    && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) {
+    return res.status(400).json({ error: 'Day of week must be a number from 0 to 6.' });
+  }
+  if (!validDate) {
+    return res.status(400).json({ error: 'Date must be a valid YYYY-MM-DD date.' });
+  }
+  if (new Date(`${date}T00:00:00Z`).getUTCDay() !== dayOfWeek) {
+    return res.status(400).json({ error: 'Day of week does not match the requested date.' });
+  }
+
+  try {
+    return res.json(await requestOperatingHours(dayOfWeek, date));
+  } catch (error) {
+    console.error('Operating hours fetch failed:', error);
+    return res.status(500).json({ error: 'Could not load today’s operating hours.' });
+  }
+});
+
+app.get('/capacity/latest', async (req, res) => {
+  try {
+    const latestCapacity = await requestLatestCapacityLog();
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      capacity: latestCapacity
+        ? {
+            ...latestCapacity,
+            at_max_capacity: Number.isInteger(latestCapacity.current_headcount)
+              && latestCapacity.current_headcount >= getMaximumCapacity(),
+          }
+        : null,
+    });
+  } catch (error) {
+    console.error('Latest capacity fetch failed:', error);
+    return res.status(500).json({ error: 'Could not load live gym capacity.' });
   }
 });
 
@@ -321,6 +636,7 @@ app.use((err, req, res, next) => {
 });
 
 if (require.main === module) {
+  require('../capacityAgent');
   app.listen(port, () => {
     console.log(`BYU Gym Planner server listening on http://localhost:${port}`);
     if (!supabaseUrl || !supabasePublishableKey) {
