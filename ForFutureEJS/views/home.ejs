@@ -53,10 +53,16 @@
     <div class="card hourly">
       <h2>Rest of today</h2>
       <p id="hourly-summary" class="mute" aria-live="polite">Loading today’s gym schedule...</p>
-      <label class="hour-picker-label" for="hour-picker">View an hour</label>
-      <select id="hour-picker" class="hour-picker" aria-label="Choose an hour to view">
-        <option>Loading hours...</option>
-      </select>
+      <div id="hour-picker-group" class="hour-picker-group" hidden>
+        <label class="hour-picker-label" for="hour-picker-trigger">View an hour</label>
+        <div class="hour-picker-control">
+          <button id="hour-picker-trigger" class="hour-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="hour-picker-options">
+            <span id="hour-picker-value">Choose an hour</span>
+            <span class="hour-picker-chevron" aria-hidden="true"></span>
+          </button>
+          <div id="hour-picker-options" class="hour-picker-options" role="listbox" aria-label="Choose an hour" hidden></div>
+        </div>
+      </div>
       <div id="hourly-bars" class="bars" role="list" aria-label="Expected gym fullness during today's operating hours"></div>
     </div>
   </section>

@@ -3,7 +3,10 @@
 
   var summary = document.getElementById("hourly-summary");
   var chart = document.getElementById("hourly-bars");
-  var hourPicker = document.getElementById("hour-picker");
+  var hourPickerGroup = document.getElementById("hour-picker-group");
+  var hourPickerTrigger = document.getElementById("hour-picker-trigger");
+  var hourPickerValue = document.getElementById("hour-picker-value");
+  var hourPickerOptions = document.getElementById("hour-picker-options");
   var capacityError = document.getElementById("capacity-error");
   var capacityGauge = document.getElementById("capacity-gauge");
   var capacityValue = document.getElementById("capacity-value");
@@ -47,7 +50,9 @@
 
   function setEmptyChart(message) {
     chart.replaceChildren();
-    hourPicker.hidden = true;
+    hourPickerGroup.hidden = true;
+    hourPickerOptions.hidden = true;
+    hourPickerTrigger.setAttribute("aria-expanded", "false");
     var empty = document.createElement("p");
     empty.className = "chart-empty";
     empty.textContent = message;
@@ -186,19 +191,49 @@
         ? slot.hour
         : closest;
     }, slots[0].hour);
-    hourPicker.replaceChildren();
+    hourPickerOptions.replaceChildren();
     slots.forEach(function (slot) {
-      var option = document.createElement("option");
-      option.value = slot.hour;
-      option.textContent = hourLabel(slot.hour) + (slot.open ? "" : " (closed)");
-      hourPicker.appendChild(option);
+      var option = document.createElement("div");
+      option.className = "hour-picker-option";
+      option.setAttribute("role", "option");
+      option.setAttribute("tabindex", "-1");
+      option.dataset.hour = slot.hour;
+      option.textContent = hourLabel(slot.hour) + (slot.open ? "" : " · Closed");
+      option.addEventListener("click", function () {
+        selectHour(slot.hour);
+        closeHourPicker(true);
+        renderChart();
+      });
+      option.addEventListener("keydown", function (event) {
+        var options = Array.from(hourPickerOptions.querySelectorAll('[role="option"]'));
+        var optionIndex = options.indexOf(option);
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          var direction = event.key === "ArrowDown" ? 1 : -1;
+          options[(optionIndex + direction + options.length) % options.length].focus();
+        } else if (event.key === "Home" || event.key === "End") {
+          event.preventDefault();
+          options[event.key === "Home" ? 0 : options.length - 1].focus();
+        } else if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectHour(slot.hour);
+          closeHourPicker(true);
+          renderChart();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          closeHourPicker(true);
+        } else if (event.key === "Tab") {
+          closeHourPicker(false);
+        }
+      });
+      hourPickerOptions.appendChild(option);
     });
-    hourPicker.value = String(selectedHour);
-    hourPicker.hidden = !mobileChart.matches;
+    selectHour(selectedHour);
+    hourPickerGroup.hidden = !mobileChart.matches;
 
     function renderChart() {
       var visibleSlots = mobileChart.matches
-        ? slots.filter(function (slot) { return slot.hour === Number(hourPicker.value); })
+        ? slots.filter(function (slot) { return slot.hour === selectedHour; })
         : slots;
       chart.replaceChildren();
       visibleSlots.forEach(function (slot) {
@@ -229,9 +264,49 @@
       });
     }
 
-    hourPicker.addEventListener("change", renderChart);
+    function selectHour(hour) {
+      selectedHour = hour;
+      var selectedSlot = slots.find(function (slot) { return slot.hour === hour; });
+      hourPickerValue.textContent = hourLabel(hour) + (selectedSlot.open ? "" : " · Closed");
+      Array.from(hourPickerOptions.querySelectorAll('[role="option"]')).forEach(function (option) {
+        var selected = Number(option.dataset.hour) === hour;
+        option.setAttribute("aria-selected", String(selected));
+        option.classList.toggle("is-selected", selected);
+      });
+    }
+
+    function closeHourPicker(returnFocus) {
+      hourPickerOptions.hidden = true;
+      hourPickerTrigger.setAttribute("aria-expanded", "false");
+      if (returnFocus) hourPickerTrigger.focus();
+    }
+
+    hourPickerTrigger.onclick = function () {
+      var opening = hourPickerOptions.hidden;
+      hourPickerOptions.hidden = !opening;
+      hourPickerTrigger.setAttribute("aria-expanded", String(opening));
+      if (opening) {
+        var selectedOption = hourPickerOptions.querySelector('[aria-selected="true"]');
+        if (selectedOption) selectedOption.focus();
+      }
+    };
+    hourPickerTrigger.onkeydown = function (event) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if (hourPickerOptions.hidden) {
+          hourPickerOptions.hidden = false;
+          hourPickerTrigger.setAttribute("aria-expanded", "true");
+        }
+        var selectedOption = hourPickerOptions.querySelector('[aria-selected="true"]');
+        if (selectedOption) selectedOption.focus();
+      }
+    };
+    document.addEventListener("click", function (event) {
+      if (!event.target.closest(".hour-picker-control")) closeHourPicker(false);
+    });
     if (mobileChart.addEventListener) mobileChart.addEventListener("change", function () {
-      hourPicker.hidden = !mobileChart.matches;
+      hourPickerGroup.hidden = !mobileChart.matches;
+      closeHourPicker(false);
       renderChart();
     });
     renderChart();

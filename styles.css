@@ -394,13 +394,111 @@ main {
   margin: 4px 0 18px;
 }
 
-.hour-picker-label,
-.hour-picker {
+.hour-picker-group {
   display: none;
 }
 
-.hour-picker[hidden] {
+.hour-picker-group[hidden] {
   display: none;
+}
+
+.hour-picker-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--mute);
+  font-size: .85rem;
+  font-weight: 600;
+}
+
+.hour-picker-control {
+  position: relative;
+}
+
+.hour-picker-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  font: 600 1rem "Public Sans", system-ui, sans-serif;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(11, 37, 69, .06);
+  transition: border-color .15s, box-shadow .15s, background-color .15s;
+}
+
+.hour-picker-trigger:hover,
+.hour-picker-trigger[aria-expanded="true"] {
+  border-color: #7FB2FF;
+  box-shadow: 0 0 0 3px rgba(127, 178, 255, .16);
+}
+
+.hour-picker-trigger:focus-visible,
+.hour-picker-option:focus-visible {
+  outline: 3px solid #7FB2FF;
+  outline-offset: 2px;
+}
+
+.hour-picker-chevron {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-right: 2px solid var(--mute);
+  border-bottom: 2px solid var(--mute);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform .15s;
+}
+
+.hour-picker-trigger[aria-expanded="true"] .hour-picker-chevron {
+  transform: translateY(2px) rotate(225deg);
+}
+
+.hour-picker-options {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 12px 28px rgba(11, 37, 69, .18);
+}
+
+.hour-picker-options[hidden] {
+  display: none;
+}
+
+.hour-picker-option {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: 500 .95rem "Public Sans", system-ui, sans-serif;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hour-picker-option:hover,
+.hour-picker-option.is-selected {
+  background: rgba(31, 92, 163, .1);
+}
+
+.hour-picker-option.is-selected {
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .bars {
@@ -719,27 +817,7 @@ main {
 @media (max-width: 720px) {
   .hero { grid-template-columns: 1fr; }
   .verdict { font-size: 2rem; }
-  .hour-picker-label {
-    display: block;
-    margin-bottom: 6px;
-    font-size: .85rem;
-    font-weight: 600;
-  }
-  .hour-picker {
-    display: block;
-    width: 100%;
-    margin-bottom: 12px;
-    padding: 10px 12px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--bg);
-    color: var(--ink);
-    font: 600 1rem "Public Sans", system-ui, sans-serif;
-  }
-  .hour-picker:focus-visible {
-    outline: 3px solid #7FB2FF;
-    outline-offset: 2px;
-  }
+  .hour-picker-group { display: block; margin-bottom: 12px; }
   .bars { min-height: 190px; }
   .bar {
     flex: 1 1 100%;
