@@ -309,8 +309,10 @@
     submitButton.disabled = true;
     const originalText = submitButton.textContent;
     submitButton.textContent = 'Saving reservation...';
+    let responseReceived = false;
+    let responseWasSuccessful = false;
     try {
-      const payload = await readResponse(await fetch('/plan/visits', {
+      const response = await fetch('/plan/visits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -319,14 +321,29 @@
           duration: Number(durationInput.value),
           equipment,
         }),
-      }));
+      });
+      responseReceived = true;
+      responseWasSuccessful = response.ok;
+      const payload = await readResponse(response);
+      if (!payload.visit) throw new Error('The server did not confirm the reservation.');
       visits.push(payload.visit);
       renderVisits();
       form.querySelectorAll('input[name="equipment"]:checked')
         .forEach((checkbox) => { checkbox.checked = false; });
       showMessage('Reservation saved.');
     } catch (error) {
-      showMessage(error.message || 'Could not save your reservation.', true);
+      if (!responseReceived || responseWasSuccessful) {
+        showMessage(
+          'Could not confirm whether the reservation was saved. Check your upcoming visits before trying again.',
+          true
+        );
+      } else {
+        const detail = error.message || 'The server could not complete the request.';
+        const notSavedMessage = detail.toLowerCase().startsWith('reservation was not saved')
+          ? detail
+          : `Reservation was not saved. ${detail}`;
+        showMessage(notSavedMessage, true);
+      }
     } finally {
       submitButton.textContent = originalText;
       updateAvailableTimes();
