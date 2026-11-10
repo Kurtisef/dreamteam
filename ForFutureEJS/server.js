@@ -49,6 +49,67 @@ async function requestProfiles({ method = 'GET', filters = {}, body } = {}) {
     headers.Prefer = 'return=representation';
     options.body = JSON.stringify(body);
   }
+  const response = await fetch(url, options);
+  const responseText = await response.text();
+  let result;
+  try {
+    result = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    result = null;
+  }
+
+  if (!response.ok) {
+    const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
+    throw new Error(message);
+  }
+  return result;
+}
+
+const plannedVisitSelect = [
+  'planned_visit_id',
+  'profile_id',
+  'intended_arrival',
+  'exit_time',
+  'racks',
+  'dumbbells',
+  'cable_stacks',
+  'weight_machines',
+  'cardio_machines',
+].join(',');
+
+async function requestPlannedVisits({ profileId, method = 'GET', date, visitId, beforeArrival, body } = {}) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Planned visit database access is not configured.');
+  }
+
+  const url = new URL(`${supabaseUrl}/rest/v1/planned_visits`);
+  url.searchParams.set('select', plannedVisitSelect);
+  if (profileId !== undefined) url.searchParams.set('profile_id', `eq.${profileId}`);
+  if (visitId !== undefined) url.searchParams.set('planned_visit_id', `eq.${visitId}`);
+  if (beforeArrival !== undefined) {
+    url.searchParams.set('intended_arrival', `lt.${beforeArrival}`);
+  }
+  if (date) {
+    const nextDate = new Date(`${date}T00:00:00Z`);
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+    const nextDateString = nextDate.toISOString().slice(0, 10);
+    url.searchParams.set(
+      'and',
+      `(intended_arrival.gte.${date}T00:00:00,intended_arrival.lt.${nextDateString}T00:00:00)`
+    );
+  }
+
+  const headers = {
+    apikey: supabaseServiceRoleKey,
+    Authorization: `Bearer ${supabaseServiceRoleKey}`,
+  };
+  const options = { method, headers };
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    headers.Prefer = 'return=representation';
+    options.body = JSON.stringify(body);
+  }
+  if (method === 'DELETE') headers.Prefer = 'return=representation';
 
   const response = await fetch(url, options);
   const responseText = await response.text();
@@ -64,6 +125,184 @@ async function requestProfiles({ method = 'GET', filters = {}, body } = {}) {
     throw new Error(message);
   }
   return result;
+}
+
+async function requestAtomicPlannedVisit(body) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Planned visit database access is not configured.');
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/rpc/reserve_planned_visit_atomic`, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ p_visit: body }),
+  });
+  const responseText = await response.text();
+  let result;
+  try {
+    result = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    result = null;
+  }
+
+  if (!response.ok) {
+    const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
+    throw new Error(message);
+  }
+  return result;
+}
+
+function getGymClockParts() {
+  const timeZone = process.env.GYM_TIME_ZONE || 'America/Denver';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return {
+    date: `${values.year}-${values.month}-${values.day}`,
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day),
+    hour: Number(values.hour),
+    minute: Number(values.minute),
+    second: Number(values.second),
+  };
+}
+
+async function deleteOldPlannedVisits() {
+  const gymNow = getGymClockParts();
+  const cutoffDate = new Date(`${gymNow.date}T00:00:00Z`);
+  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 7);
+  const cutoffDay = cutoffDate.toISOString().slice(0, 10);
+  const cutoffTime = [gymNow.hour, gymNow.minute, gymNow.second]
+    .map((part) => String(part).padStart(2, '0'))
+    .join(':');
+  const cutoff = `${cutoffDay}T${cutoffTime}`;
+
+  return requestPlannedVisits({
+    method: 'DELETE',
+    beforeArrival: cutoff,
+  });
+}
+
+function parsePlannedVisitInput(body) {
+  const date = typeof body.date === 'string' ? body.date : '';
+  const time = typeof body.time === 'string' ? body.time : '';
+  const duration = Number(body.duration);
+  const equipment = body.equipment;
+
+  const dateMs = Date.parse(`${date}T00:00:00Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(date)
+    || Number.isNaN(dateMs)
+    || new Date(dateMs).toISOString().slice(0, 10) !== date
+  ) {
+    throw new Error('Please select a valid date.');
+  }
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+    throw new Error('Please select a valid start time.');
+  }
+  if (![30, 60, 90, 120].includes(duration)) {
+    throw new Error('Choose a reservation duration of up to 2 hours.');
+  }
+  if (!Array.isArray(equipment) || equipment.some((value) => ![
+    'Racks', 'Dumbbells', 'Cable stacks', 'Weight machines', 'Cardio machines',
+  ].includes(value))) {
+    throw new Error('Choose at least one intended equipment type.');
+  }
+  const uniqueEquipment = [...new Set(equipment)];
+  if (!uniqueEquipment.length) {
+    throw new Error('Select at least one type of equipment you plan to use.');
+  }
+
+  const gymNow = getGymClockParts();
+  const todayMs = Date.parse(`${gymNow.date}T00:00:00Z`);
+  const daysAhead = (dateMs - todayMs) / 86400000;
+  if (daysAhead < 0 || daysAhead > 7) {
+    throw new Error('Reservations can only be made today or up to 7 days in advance.');
+  }
+
+  const [startHour, startMinute] = time.split(':').map(Number);
+  if (startMinute % 30 !== 0) throw new Error('Choose a start time in 30-minute increments.');
+  const startMs = Date.parse(`${date}T${time}:00Z`);
+  const nowMs = Date.UTC(
+    gymNow.year,
+    gymNow.month - 1,
+    gymNow.day,
+    gymNow.hour,
+    gymNow.minute,
+    gymNow.second
+  );
+  if (startMs < nowMs) throw new Error('You cannot book a reservation in the past.');
+
+  const startMinuteOfDay = startHour * 60 + startMinute;
+  const endMinuteOfDay = startMinuteOfDay + duration;
+  if (endMinuteOfDay > 1440) throw new Error('Reservations cannot continue past midnight.');
+
+  const endMs = startMs + duration * 60000;
+  const toDatabaseTimestamp = (milliseconds) => new Date(milliseconds).toISOString().slice(0, 19);
+  const selected = new Set(uniqueEquipment);
+  return {
+    date,
+    duration,
+    startMinuteOfDay,
+    endMinuteOfDay,
+    intended_arrival: toDatabaseTimestamp(startMs),
+    exit_time: toDatabaseTimestamp(endMs),
+    equipment: {
+      racks: selected.has('Racks'),
+      dumbbells: selected.has('Dumbbells'),
+      cable_stacks: selected.has('Cable stacks'),
+      weight_machines: selected.has('Weight machines'),
+      cardio_machines: selected.has('Cardio machines'),
+    },
+  };
+}
+
+function parseScheduleTime(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.match(/^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d(?:\.\d+)?)?$/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function reservationFitsSchedule(startMinute, endMinute, scheduleRows) {
+  if (!Array.isArray(scheduleRows)) return false;
+
+  const intervals = scheduleRows.flatMap((row) => {
+    if (row.is_closed_all_day === true) return [];
+    const start = parseScheduleTime(row.open_time);
+    let end = parseScheduleTime(row.close_time);
+    if (start === null || end === null) return [];
+    if (end === 0 && start > 0) end = 1440;
+    else if (end <= start) end += 1440;
+    return [{ start, end }];
+  }).sort((a, b) => a.start - b.start);
+
+  const mergedIntervals = [];
+  for (const interval of intervals) {
+    const previous = mergedIntervals[mergedIntervals.length - 1];
+    if (previous && interval.start <= previous.end) {
+      previous.end = Math.max(previous.end, interval.end);
+    } else {
+      mergedIntervals.push({ ...interval });
+    }
+  }
+
+  return mergedIntervals.some((interval) => (
+    startMinute >= interval.start && endMinute <= interval.end
+  ));
 }
 
 async function requestDeskStaffByEmail(email) {
@@ -560,6 +799,118 @@ function redirectWithAuthError(res, returnPath, error) {
   res.redirect(`${returnPath}?authError=${encodeURIComponent(message)}`);
 }
 
+function requireVisitProfile(req, res) {
+  if (!req.profile) {
+    res.status(401).json({ error: 'Log in to manage planned visits.' });
+    return null;
+  }
+  if (req.profile.role === 'admin') {
+    res.status(403).json({ error: 'Admins cannot plan visits.' });
+    return null;
+  }
+  if (req.profile.profile_id === null || req.profile.profile_id === undefined) {
+    res.status(403).json({ error: 'Your profile is missing its database ID. Please log in again.' });
+    return null;
+  }
+  return req.profile;
+}
+
+app.get('/plan/visits', async (req, res) => {
+  const profile = requireVisitProfile(req, res);
+  if (!profile) return;
+  try {
+    const visits = await requestPlannedVisits({ profileId: profile.profile_id });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ visits: Array.isArray(visits) ? visits : [] });
+  } catch (error) {
+    console.error('Planned visits fetch failed:', error);
+    return res.status(500).json({ error: 'Could not load your planned visits.' });
+  }
+});
+
+app.post('/plan/visits', async (req, res) => {
+  const profile = requireVisitProfile(req, res);
+  if (!profile) return;
+
+  let reservation;
+  try {
+    reservation = parsePlannedVisitInput(req.body || {});
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
+  const dayOfWeek = new Date(`${reservation.date}T00:00:00Z`).getUTCDay();
+  let schedule;
+  try {
+    schedule = await requestOperatingHours(dayOfWeek, reservation.date);
+  } catch (error) {
+    console.error('Reservation schedule lookup failed:', error);
+    return res.status(503).json({ error: 'Could not verify the gym schedule. Please try again.' });
+  }
+  if (!reservationFitsSchedule(
+    reservation.startMinuteOfDay,
+    reservation.endMinuteOfDay,
+    schedule
+  )) {
+    return res.status(400).json({
+      error: 'The selected time is outside the gym hours or overlaps a scheduled closure for that date.',
+    });
+  }
+
+  try {
+    const result = await requestAtomicPlannedVisit({
+      profile_id: profile.profile_id,
+      intended_arrival: reservation.intended_arrival,
+      exit_time: reservation.exit_time,
+      ...reservation.equipment,
+    });
+    if (result?.status === 'overlap') {
+      return res.status(409).json({
+        error: 'This time overlaps one of your existing reservations. Choose a different time.',
+      });
+    }
+    if (result?.status === 'daily_limit') {
+      const remaining = Number.isInteger(result.remaining_minutes)
+        ? result.remaining_minutes
+        : 0;
+      return res.status(400).json({
+        error: `Daily limit is 2 hours (120 min). You have ${remaining} min remaining for ${reservation.date}.`,
+      });
+    }
+    if (result?.status !== 'saved' || !result.visit) {
+      throw new Error('Supabase did not confirm the planned visit.');
+    }
+    return res.status(201).json({ visit: result.visit });
+  } catch (error) {
+    console.error('Atomic planned visit reservation failed:', error);
+    return res.status(500).json({ error: 'Could not save your reservation. Please try again.' });
+  }
+});
+
+app.delete('/plan/visits/:visitId', async (req, res) => {
+  const profile = requireVisitProfile(req, res);
+  if (!profile) return;
+  const visitId = req.params.visitId;
+  if (!/^[A-Za-z0-9-]+$/.test(visitId)) {
+    return res.status(400).json({ error: 'Invalid planned visit ID.' });
+  }
+
+  try {
+    const deleted = await requestPlannedVisits({
+      profileId: profile.profile_id,
+      visitId,
+      method: 'DELETE',
+    });
+    if (!Array.isArray(deleted) || deleted.length === 0) {
+      return res.status(404).json({ error: 'That reservation was not found.' });
+    }
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Planned visit cancellation failed:', error);
+    return res.status(500).json({ error: 'Could not cancel the reservation. Please try again.' });
+  }
+});
+
 app.post('/login', async (req, res) => {
   const displayName = typeof req.body.display_name === 'string' ? req.body.display_name.trim() : '';
   const email = typeof req.body.email === 'string' ? req.body.email.trim() : '';
@@ -773,7 +1124,11 @@ app.get('/admin.css', (req, res) => {
 });
 
 function renderPage(view) {
-  return (req, res) => res.render(view, { user: req.profile, currentPath: req.path });
+  return (req, res) => res.render(view, {
+    user: req.profile,
+    currentPath: req.path,
+    gymTimeZone: process.env.GYM_TIME_ZONE || 'America/Denver',
+  });
 }
 
 app.get('/', renderPage('home'));
@@ -806,4 +1161,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app };
+module.exports = { app, deleteOldPlannedVisits };
