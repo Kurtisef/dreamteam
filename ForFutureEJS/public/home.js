@@ -8,6 +8,7 @@
   var hourPickerValue = document.getElementById("hour-picker-value");
   var hourPickerOptions = document.getElementById("hour-picker-options");
   var capacityError = document.getElementById("capacity-error");
+  var capacityHero = document.getElementById("capacity-hero");
   var capacityGauge = document.getElementById("capacity-gauge");
   var capacityValue = document.getElementById("capacity-value");
   var capacityVerdict = document.getElementById("capacity-verdict");
@@ -16,6 +17,10 @@
   var outsideWaitValue = document.getElementById("outside-wait-value");
   var equipmentWaitValue = document.getElementById("equipment-wait-value");
   var mobileChart = window.matchMedia("(max-width: 720px)");
+  var capacityData = null;
+  var capacityAvailable = false;
+  var scheduleStatus = "loading";
+  var maximumCapacityAgeMs = 30 * 60 * 1000;
 
   function parseTime(value) {
     if (typeof value !== "string") return null;
@@ -59,20 +64,16 @@
     return Number.isInteger(value) && value >= 0;
   }
 
-  function renderCapacity(capacity) {
-    if (!capacity) {
-      capacityError.hidden = false;
-      capacityError.textContent = "Live gym estimates are not available yet.";
-      capacityValue.textContent = "--%";
-      capacityVerdict.textContent = "Live capacity unavailable";
-      outsideWaitValue.textContent = "-- min";
-      equipmentWaitValue.textContent = "-- min";
-      capacityUpdated.textContent = "";
-      capacityGauge.style.setProperty("--v", 0);
-      capacityGauge.setAttribute("aria-label", "Live gym capacity unavailable");
-      return;
+  function isValidCapacity(capacity) {
+    var recordedAtValue = typeof capacity.recorded_at === "string"
+      ? capacity.recorded_at
+      : "";
+    if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(recordedAtValue)) {
+      recordedAtValue += "Z";
     }
-
+    recordedAtValue = recordedAtValue.replace(/(\.\d{3})\d+(?=Z|[+-]\d{2}:\d{2}$)/i, "$1");
+    var recordedAt = new Date(recordedAtValue);
+    var ageMs = Date.now() - recordedAt.getTime();
     if (
       !isNonNegativeInteger(capacity.capacity_percentage)
       || !isNonNegativeInteger(capacity.outside_wait_mins)
@@ -80,22 +81,56 @@
       || (capacity.current_headcount !== null && !isNonNegativeInteger(capacity.current_headcount))
       || (capacity.equipment_wait_mins !== null && !isNonNegativeInteger(capacity.equipment_wait_mins))
       || capacity.capacity_percentage > 100
+      || Number.isNaN(recordedAt.getTime())
+      || ageMs > maximumCapacityAgeMs
+      || ageMs < -5 * 60 * 1000
     ) {
       throw new Error("The latest capacity record contains invalid metrics.");
     }
+  }
 
-    var percent = capacity.capacity_percentage;
+  function renderHeroState() {
+    capacityHero.classList.remove("is-closed", "is-unavailable");
+
+    if (scheduleStatus === "closed") {
+      capacityError.hidden = true;
+      capacityHero.classList.add("is-closed");
+      capacityVerdict.textContent = "The gym is closed right now.";
+      capacityValue.textContent = "Closed";
+      outsideWaitValue.textContent = "Closed";
+      equipmentWaitValue.textContent = "Closed";
+      capacityUpdated.textContent = "";
+      capacityGauge.style.setProperty("--v", 0);
+      capacityGauge.setAttribute("aria-label", "The gym is closed");
+      return;
+    }
+
+    if (scheduleStatus === "unavailable" || !capacityAvailable || !capacityData) {
+      capacityError.hidden = false;
+      capacityError.textContent = "Live estimates are unavailable. We can’t load current gym data right now.";
+      capacityHero.classList.add("is-unavailable");
+      capacityVerdict.textContent = "We can’t read the gym right now.";
+      capacityValue.textContent = "Unavailable";
+      outsideWaitValue.textContent = "Unavailable";
+      equipmentWaitValue.textContent = "Unavailable";
+      capacityUpdated.textContent = "";
+      capacityGauge.style.setProperty("--v", 0);
+      capacityGauge.setAttribute("aria-label", "Live gym capacity unavailable");
+      return;
+    }
+
     capacityError.hidden = true;
+    var percent = capacityData.capacity_percentage;
     capacityValue.textContent = percent + "% full";
     capacityVerdict.textContent = percent >= 85 ? "The gym is very busy right now." : "Live gym capacity";
-    outsideWaitValue.textContent = capacity.outside_wait_mins + " min";
-    equipmentWaitValue.textContent = capacity.equipment_wait_mins === null
+    outsideWaitValue.textContent = capacityData.outside_wait_mins + " min";
+    equipmentWaitValue.textContent = capacityData.equipment_wait_mins === null
       ? "Unavailable"
-      : capacity.equipment_wait_mins + " min";
+      : capacityData.equipment_wait_mins + " min";
     capacityGauge.style.setProperty("--v", percent / 100);
     capacityGauge.setAttribute("aria-label", "Gym is " + percent + "% full");
 
-    var recordedAtValue = capacity.recorded_at;
+    var recordedAtValue = capacityData.recorded_at;
     if (typeof recordedAtValue === "string" && !/(?:Z|[+-]\d{2}:\d{2})$/i.test(recordedAtValue)) {
       recordedAtValue += "Z";
     }
@@ -111,6 +146,28 @@
         minute: "2-digit"
       });
     }
+  }
+
+  function renderCapacity(capacity) {
+    if (!capacity) {
+      capacityData = null;
+      capacityAvailable = false;
+      renderHeroState();
+      return;
+    }
+
+    isValidCapacity(capacity);
+    capacityData = capacity;
+    capacityAvailable = true;
+    renderHeroState();
+  }
+
+  function setUnavailable(error, scheduleUnavailable) {
+    if (error) console.error("Live gym data is unavailable:", error);
+    capacityData = null;
+    capacityAvailable = false;
+    if (scheduleUnavailable) scheduleStatus = "unavailable";
+    renderHeroState();
   }
 
   function loadCapacity() {
@@ -171,6 +228,8 @@
 
   function renderSchedule(rows, now, hourlyAverages) {
     if (!rows.length) {
+      scheduleStatus = "unavailable";
+      renderHeroState();
       summary.textContent = "No operating hours are configured for today.";
       setEmptyChart("Hours unavailable");
       return;
@@ -190,14 +249,25 @@
     intervals.sort(function (a, b) { return a.start - b.start; });
     if (!intervals.length) {
       if (rows.every(function (row) { return row.is_closed_all_day === true; })) {
+        scheduleStatus = "closed";
+        renderHeroState();
         summary.textContent = "The gym is closed all day today.";
         setEmptyChart("Closed all day");
       } else {
+        scheduleStatus = "unavailable";
+        renderHeroState();
         summary.textContent = "Today’s schedule is unavailable.";
         setEmptyChart("Hours unavailable");
       }
       return;
     }
+
+    var currentMinute = now.getHours() * 60 + now.getMinutes();
+    var isOpenNow = intervals.some(function (interval) {
+      return currentMinute >= interval.start && currentMinute < interval.end;
+    });
+    scheduleStatus = isOpenNow ? "open" : "closed";
+    renderHeroState();
 
     summary.textContent = "Today’s hours: " + intervals.map(function (interval) {
       return timeLabel(interval.start) + "–" + timeLabel(interval.end);
@@ -207,7 +277,6 @@
     var lastHour = Math.ceil(intervals.reduce(function (latest, interval) {
       return Math.max(latest, interval.end);
     }, 0) / 60);
-    var currentMinute = now.getHours() * 60 + now.getMinutes();
     var slots = [];
 
     for (var hour = firstHour; hour < lastHour; hour += 1) {
@@ -384,17 +453,11 @@
 
   var now = new Date();
   loadCapacity().catch(function () {
-    capacityError.hidden = false;
-    capacityError.textContent = "Live gym estimates could not be loaded. Please try again shortly.";
-    capacityValue.textContent = "--%";
-    capacityVerdict.textContent = "Live capacity unavailable";
-    outsideWaitValue.textContent = "-- min";
-    equipmentWaitValue.textContent = "-- min";
+    setUnavailable(new Error("Could not load live gym capacity."));
   });
   window.setInterval(function () {
     loadCapacity().catch(function () {
-      capacityError.hidden = false;
-      capacityError.textContent = "Could not refresh live gym estimates. Displaying the latest saved data.";
+      setUnavailable(new Error("Could not refresh live gym capacity."));
     });
   }, 60 * 1000);
 
@@ -424,6 +487,7 @@
     })
     .catch(function (error) {
       console.error("Could not load the schedule or hourly capacity data:", error);
+      setUnavailable(error, true);
       summary.textContent = "Today’s schedule or live capacity data is unavailable.";
       setEmptyChart("Could not load live hourly capacity.");
     });
@@ -433,6 +497,7 @@
       updateHourlyChart(hourlyAverages, new Date());
     }).catch(function (error) {
       console.error("Could not refresh hourly capacity data:", error);
+      setUnavailable(error);
       summary.textContent = "Hourly capacity could not be refreshed. Showing the latest loaded data.";
     });
   }, 60 * 1000);
