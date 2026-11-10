@@ -1,0 +1,12 @@
+{
+  "scripts": {
+    "start": "node --env-file=.env server.js"
+  },
+  "dependencies": {
+    "@google/genai": "^3.0.0",
+    "@supabase/supabase-js": "^2.119.0",
+    "ejs": "^7.0.2",
+    "express": "^5.3.0",
+    "node-cron": "^4.6.0"
+  }
+}

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BYU Gym Planner | Home</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Public+Sans:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles.css">
+<style>.screen { display: block; }</style>
+</head>
+<body>
+<div class="app">
+<header class="top"><div class="in">
+  <h1>BYU Gym Planner</h1>
+  <p>Know before you go. For BYU students and faculty.</p>
+  <span id="auth-user" class="auth-user" aria-live="polite"><% if (typeof user !== 'undefined' && user) { %>Logged in as <%= user.display_name %><% } %></span>
+  <button id="auth-btn" class="auth-btn" data-logged-in="<%= user ? 'true' : 'false' %>" type="button"><%= user ? 'Log out' : 'Log in' %></button>
+  <nav class="tabs" aria-label="Screens">
+    <a href="/home" aria-current="page">Home</a>
+    <% if (user && user.role === 'admin') { %>
+    <a href="/admin">Admin</a>
+    <% } else { %>
+    <a href="/live">Live feed</a><a href="/week">Week view</a>
+    <a href="/plan">Plan visit</a>
+    <% } %>
+  </nav>
+</div></header>
+
+<main>
+  <section class="screen home" aria-label="Home">
+    <div id="capacity-error" class="banner capacity-error" role="status" aria-live="polite" hidden></div>
+    <div id="capacity-hero" class="card hero">
+      <div>
+        <h2 id="capacity-verdict" class="verdict">Live gym capacity</h2>
+        <div id="capacity-gauge" class="gauge crowd-meter" role="img" aria-label="Live gym capacity unavailable"><div class="arc"></div><div class="needle"></div><div class="hub"></div></div>
+        <div class="read">
+          <div id="capacity-value" class="big">--%</div>
+          <p id="capacity-updated" class="capacity-updated"></p>
+        </div>
+      </div>
+      <div class="waits">
+        <div id="outside-wait" class="wait"><span class="k">Outside wait</span>
+          <span id="outside-wait-value" class="v">-- min</span>
+          <span class="d">Time to get into the building</span></div>
+        <div class="wait"><span class="k">Equipment wait</span>
+          <span id="equipment-wait-value" class="v">-- min</span>
+          <span class="d">Time to get on machines or weights once inside</span></div>
+      </div>
+    </div>
+
+    <div class="card hourly">
+      <h2>Rest of today</h2>
+      <p id="hourly-summary" class="mute" aria-live="polite">Loading today’s gym schedule...</p>
+      <div id="hour-picker-group" class="hour-picker-group" hidden>
+        <label class="hour-picker-label" for="hour-picker-trigger">View an hour</label>
+        <div class="hour-picker-control">
+          <button id="hour-picker-trigger" class="hour-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="hour-picker-options">
+            <span id="hour-picker-value">Choose an hour</span>
+            <span class="hour-picker-chevron" aria-hidden="true"></span>
+          </button>
+          <div id="hour-picker-options" class="hour-picker-options" role="listbox" aria-label="Choose an hour" hidden></div>
+        </div>
+      </div>
+      <div id="hourly-bars" class="bars" role="list" aria-label="Average recorded gym capacity by hour during today's operating hours"></div>
+    </div>
+  </section>
+</main>
+</div>
+<%- include('partials/auth-dialog') %>
+<script src="/auth.js" defer></script>
+<script src="/home.js" defer></script>
+</body>
+</html>

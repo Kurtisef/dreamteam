@@ -1,0 +1,35 @@
+<dialog id="auth-dialog" class="auth-dialog" aria-labelledby="auth-title">
+  <form id="auth-form" action="/login" method="post" novalidate>
+    <h2 id="auth-title">Log in</h2>
+    <input type="hidden" name="mode" id="auth-mode" value="login">
+    <input type="hidden" name="return_to" value="<%= currentPath %>">
+
+    <label for="auth-display-name">Username</label>
+    <input id="auth-display-name" name="display_name" type="text" autocomplete="username" required>
+
+    <label for="auth-email">Email</label>
+    <input id="auth-email" name="email" type="email" autocomplete="email" required>
+
+    <p id="auth-msg" role="status" aria-live="polite"></p>
+    <button id="auth-submit" type="submit">Log in</button>
+    <button id="admin-login-open" type="button" class="link">Admin login</button>
+    <button id="auth-toggle" type="button" class="link">New here? Create a profile</button>
+    <button id="auth-close" type="button" class="link">Cancel</button>
+  </form>
+</dialog>
+
+<dialog id="admin-auth-dialog" class="auth-dialog" aria-labelledby="admin-auth-title">
+  <form action="/admin-login" method="post" novalidate>
+    <h2 id="admin-auth-title">Admin login</h2>
+    <label for="admin-email">Email</label>
+    <input id="admin-email" name="email" type="email" autocomplete="email" required>
+
+    <label for="admin-password">Password</label>
+    <input id="admin-password" name="password" type="password" autocomplete="current-password" required>
+
+    <p id="admin-auth-msg" role="status" aria-live="polite"></p>
+    <button type="submit">Log in as admin</button>
+    <button id="admin-auth-back" type="button" class="link">Back to regular login</button>
+    <button id="admin-auth-close" type="button" class="link">Cancel</button>
+  </form>
+</dialog>

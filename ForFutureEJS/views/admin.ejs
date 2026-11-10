@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Admin | BYU Gym Planner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Public+Sans:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+  <div class="app">
+    <header class="top"><div class="in">
+      <h1>BYU Gym Planner</h1>
+      <p>Admin desk. Record people entering and leaving the gym.</p>
+      <nav class="tabs" aria-label="Screens">
+        <a href="/home">Home</a>
+        <a href="/admin" aria-current="page">Admin</a>
+      </nav>
+    </div></header>
+
+    <main class="admin">
+      <section class="card counter" aria-live="polite">
+        <div class="inside">
+          <span class="k">Currently inside</span>
+          <span class="big" id="inside-count">0</span>
+        </div>
+        <div class="big-btns">
+          <button type="button" id="btn-in" class="giant go">
+            <span class="g-title">Check in</span>
+            <span class="g-sub">Someone entered</span>
+          </button>
+          <button type="button" id="btn-out" class="giant hot">
+            <span class="g-title">Check out</span>
+            <span class="g-sub">Someone left</span>
+          </button>
+        </div>
+        <p id="admin-msg" role="status" aria-live="polite"></p>
+      </section>
+
+      <section id="wait-panel" class="card wait-panel" aria-labelledby="wait-title" hidden>
+        <h3 id="wait-title">How long did they wait in line?</h3>
+        <p class="mute">Enter 0–59 whole minutes</p>
+        <form id="wait-form" novalidate>
+          <div class="wait-field">
+            <label for="wait-min" class="sr-label">Minutes waited</label>
+            <input id="wait-min" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" autocomplete="off" placeholder="Optional" aria-describedby="wait-err">
+            <span class="unit" aria-hidden="true">min</span>
+          </div>
+          <p id="wait-err" role="alert"></p>
+          <div class="wait-actions">
+            <button type="submit" class="btn-primary">Save wait time</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="close-confirm" class="card close-confirm" aria-labelledby="close-confirm-title" hidden>
+        <h3 id="close-confirm-title">Close the gym?</h3>
+        <p class="mute">This resets the count and clears all recent activity.</p>
+        <div class="wait-actions">
+          <button type="button" id="close-confirm-yes" class="btn-primary">Yes, close gym</button>
+          <button type="button" id="close-confirm-no" class="btn-secondary">Cancel</button>
+        </div>
+      </section>
+      <button type="button" id="btn-close-gym" class="close-gym">Close Gym</button>
+
+      <section class="card log">
+        <h3>Recent activity</h3>
+        <ul id="log-list" class="log-list">
+          <li class="mute empty">Nothing recorded yet.</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+  <script src="/admin.js" defer></script>
+</body>
+</html>
