@@ -536,6 +536,10 @@ main {
   height: 12px;
   background: var(--line);
 }
+.bar.no-data i {
+  height: 12px;
+  background: var(--line);
+}
 .bar.now {
   padding: 4px 2px;
   border: 2px solid #7FB2FF;

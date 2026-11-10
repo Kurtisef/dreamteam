@@ -7,6 +7,17 @@ const port = Number(process.env.PORT) || 3000;
 const supabaseUrl = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const gymTimeZone = process.env.GYM_TIME_ZONE || 'America/Denver';
+const gymDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: gymTimeZone,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
 
 const SESSION_COOKIE = 'gym_profile_session';
 const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
@@ -286,6 +297,137 @@ async function requestLatestCapacityLog() {
     throw new Error('Supabase returned an invalid capacity log list.');
   }
   return result[0] || null;
+}
+
+function getZonedDateTimeParts(date) {
+  return Object.fromEntries(
+    gymDateTimeFormatter.formatToParts(date)
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, part.value])
+  );
+}
+
+function getUtcTimeForGymMidnight(date) {
+  const [year, month, day] = date.split('-').map(Number);
+  const targetUtc = Date.UTC(year, month - 1, day);
+  let timestamp = targetUtc;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const parts = getZonedDateTimeParts(new Date(timestamp));
+    const representedUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second)
+    );
+    const correction = targetUtc - representedUtc;
+    timestamp += correction;
+    if (correction === 0) break;
+  }
+
+  return new Date(timestamp);
+}
+
+function formatUtcDatabaseTimestamp(date) {
+  return date.toISOString().replace('Z', '');
+}
+
+async function requestHourlyCapacityAverages(date) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Capacity data access is not configured.');
+  }
+
+  const historicalStartDate = new Date(`${date}T00:00:00Z`);
+  historicalStartDate.setUTCFullYear(historicalStartDate.getUTCFullYear() - 1);
+  const historicalStart = getUtcTimeForGymMidnight(historicalStartDate.toISOString().slice(0, 10));
+  const nextDate = new Date(`${date}T00:00:00Z`);
+  nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+  const end = getUtcTimeForGymMidnight(nextDate.toISOString().slice(0, 10));
+  const startAt = formatUtcDatabaseTimestamp(historicalStart);
+  const endAt = formatUtcDatabaseTimestamp(end);
+  const pageSize = 1000;
+  const todaySumsByHour = Array(24).fill(0);
+  const todayCountsByHour = Array(24).fill(0);
+  const weekdaySumsByHour = Array(24).fill(0);
+  const weekdayCountsByHour = Array(24).fill(0);
+  const targetWeekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+
+  for (let offset = 0; ; offset += pageSize) {
+    const url = new URL(`${supabaseUrl}/rest/v1/capacity_logs`);
+    url.searchParams.set('select', 'recorded_at,capacity_percentage');
+    url.searchParams.set('recorded_at', `gte.${startAt}`);
+    url.searchParams.set('and', `(recorded_at.lt.${endAt})`);
+    url.searchParams.set('order', 'recorded_at.asc');
+
+    const response = await fetch(url, {
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `******`,
+        'Range-Unit': 'items',
+        Range: `${offset}-${offset + pageSize - 1}`,
+      },
+    });
+    const responseText = await response.text();
+    let rows;
+    try {
+      rows = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      rows = null;
+    }
+
+    if (!response.ok) {
+      const message = rows?.message || rows?.hint || `Supabase request failed (${response.status}).`;
+      throw new Error(message);
+    }
+    if (!Array.isArray(rows)) {
+      throw new Error('Supabase returned an invalid hourly capacity log list.');
+    }
+
+    for (const row of rows) {
+      if (!Number.isInteger(row.capacity_percentage)
+        || row.capacity_percentage < 0
+        || row.capacity_percentage > 100
+        || typeof row.recorded_at !== 'string') {
+        throw new Error('Supabase returned an invalid capacity log row.');
+      }
+
+      const recordedAt = /(?:Z|[+-]\d{2}:\d{2})$/i.test(row.recorded_at)
+        ? new Date(row.recorded_at)
+        : new Date(`${row.recorded_at}Z`);
+      if (Number.isNaN(recordedAt.getTime())) {
+        throw new Error('Supabase returned an invalid capacity log timestamp.');
+      }
+      const parts = getZonedDateTimeParts(recordedAt);
+      const localDate = `${parts.year}-${parts.month}-${parts.day}`;
+      const hour = Number(parts.hour);
+      if (localDate === date) {
+        todaySumsByHour[hour] += row.capacity_percentage;
+        todayCountsByHour[hour] += 1;
+      } else if (
+        localDate < date
+        && localDate >= historicalStartDate.toISOString().slice(0, 10)
+        && new Date(`${localDate}T00:00:00Z`).getUTCDay() === targetWeekday
+      ) {
+        weekdaySumsByHour[hour] += row.capacity_percentage;
+        weekdayCountsByHour[hour] += 1;
+      }
+    }
+
+    if (rows.length < pageSize) break;
+  }
+
+  const averagesFor = (sums, counts) => Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    average_capacity: counts[hour] ? sums[hour] / counts[hour] : null,
+    sample_count: counts[hour],
+  }));
+  return {
+    today: averagesFor(todaySumsByHour, todayCountsByHour),
+    weekday: averagesFor(weekdaySumsByHour, weekdayCountsByHour),
+    historical_start_date: historicalStartDate.toISOString().slice(0, 10),
+  };
 }
 
 function getMaximumCapacity() {
@@ -592,6 +734,25 @@ app.get('/capacity/latest', async (req, res) => {
   } catch (error) {
     console.error('Latest capacity fetch failed:', error);
     return res.status(500).json({ error: 'Could not load live gym capacity.' });
+  }
+});
+
+app.get('/capacity/hourly', async (req, res) => {
+  const date = typeof req.query.date === 'string' ? req.query.date : '';
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+    && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  if (!validDate) {
+    return res.status(400).json({ error: 'Date must be a valid YYYY-MM-DD date.' });
+  }
+
+  try {
+    const hourlyAverages = await requestHourlyCapacityAverages(date);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ date, ...hourlyAverages });
+  } catch (error) {
+    console.error('Hourly capacity fetch failed:', error);
+    return res.status(500).json({ error: 'Could not load hourly gym capacity.' });
   }
 });
 

@@ -16,10 +16,6 @@
   var outsideWaitValue = document.getElementById("outside-wait-value");
   var equipmentWaitValue = document.getElementById("equipment-wait-value");
   var mobileChart = window.matchMedia("(max-width: 720px)");
-  var mockFullnessByHour = [
-    20, 15, 12, 10, 12, 18, 28, 40, 52, 62, 66, 60,
-    55, 50, 52, 60, 62, 78, 86, 66, 48, 30, 20, 15
-  ];
 
   function parseTime(value) {
     if (typeof value !== "string") return null;
@@ -135,7 +131,45 @@
       });
   }
 
-  function renderSchedule(rows, now) {
+  function fetchHourlyCapacity(date) {
+    return fetch("/capacity/hourly?date=" + date, {
+      credentials: "same-origin",
+      cache: "no-store"
+    }).then(function (response) {
+      return response.json().then(function (body) {
+        if (!response.ok) {
+          throw new Error(body && body.error ? body.error : "Could not load hourly gym capacity.");
+        }
+        function isValidAverageSet(averages) {
+          return Array.isArray(averages)
+            && averages.length === 24
+            && averages.every(function (item, index) {
+              return item
+                && item.hour === index
+                && Number.isInteger(item.sample_count)
+                && item.sample_count >= 0
+                && (item.average_capacity === null
+                  || (typeof item.average_capacity === "number"
+                    && Number.isFinite(item.average_capacity)
+                    && item.average_capacity >= 0
+                    && item.average_capacity <= 100));
+            });
+        }
+        if (
+          !body
+          || body.date !== date
+          || !isValidAverageSet(body.today)
+          || !isValidAverageSet(body.weekday)
+          || typeof body.historical_start_date !== "string"
+        ) {
+          throw new Error("The hourly capacity response was invalid.");
+        }
+        return body;
+      });
+    });
+  }
+
+  function renderSchedule(rows, now, hourlyAverages) {
     if (!rows.length) {
       summary.textContent = "No operating hours are configured for today.";
       setEmptyChart("Hours unavailable");
@@ -165,7 +199,7 @@
       return;
     }
 
-    summary.textContent = "Expected fullness by hour. Today’s hours: " + intervals.map(function (interval) {
+    summary.textContent = "Today’s hours: " + intervals.map(function (interval) {
       return timeLabel(interval.start) + "–" + timeLabel(interval.end);
     }).join(", ") + ".";
 
@@ -182,9 +216,9 @@
       var open = intervals.some(function (interval) {
         return interval.start < end && interval.end > start;
       });
-      var fullness = mockFullnessByHour[((hour % 24) + 24) % 24];
-      slots.push({ hour: hour, open: open, fullness: fullness });
+      slots.push({ hour: hour, open: open, fullness: null, forecast: false });
     }
+    updateSlotAverages(hourlyAverages, now);
 
     var selectedHour = slots.reduce(function (closest, slot) {
       return Math.abs(slot.hour - now.getHours()) < Math.abs(closest - now.getHours())
@@ -240,17 +274,26 @@
         var current = currentMinute >= slot.hour * 60 && currentMinute < (slot.hour + 1) * 60;
         var bar = document.createElement("div");
         bar.className = "bar " + (slot.open
-          ? (slot.fullness < 35 ? "go" : slot.fullness < 70 ? "mid" : "hot")
+          ? (slot.fullness === null
+            ? "no-data"
+            : (slot.fullness < 35 ? "go" : slot.fullness < 70 ? "mid" : "hot"))
           : "closed");
-        if (slot.open) bar.style.setProperty("--p", slot.fullness);
+        if (slot.open && slot.fullness !== null) bar.style.setProperty("--p", slot.fullness);
         if (current) bar.classList.add("now");
         bar.setAttribute("role", "listitem");
         bar.setAttribute("aria-label", hourLabel(slot.hour)
-          + (slot.open ? ", " + slot.fullness + "% expected fullness" : ", closed")
+          + (slot.open
+            ? (slot.fullness === null
+              ? ", no capacity data recorded"
+              : ", " + formatPercentage(slot.fullness) + "% "
+                + (slot.forecast ? "weekday forecast average" : "average capacity today"))
+            : ", closed")
           + (current ? ", current hour" : ""));
 
         var value = document.createElement("em");
-        value.textContent = slot.open ? slot.fullness + "%" : "Closed";
+        value.textContent = slot.open
+          ? (slot.fullness === null ? "N/A" : formatPercentage(slot.fullness) + "%")
+          : "Closed";
         var column = document.createElement("i");
         var label = document.createElement("b");
         label.textContent = mobileChart.matches ? hourLabel(slot.hour) : compactHourLabel(slot.hour);
@@ -262,6 +305,23 @@
         bar.appendChild(label);
         chart.appendChild(bar);
       });
+    }
+
+    function updateSlotAverages(averages, atTime) {
+      slots.forEach(function (slot) {
+        var localHour = ((slot.hour % 24) + 24) % 24;
+        slot.forecast = slot.hour > atTime.getHours();
+        var averagesForHour = slot.forecast ? averages.weekday : averages.today;
+        var hourlyAverage = averagesForHour.find(function (item) {
+          return item.hour === localHour;
+        });
+        slot.fullness = hourlyAverage ? hourlyAverage.average_capacity : null;
+      });
+    }
+
+    function formatPercentage(value) {
+      var rounded = Math.round(value * 10) / 10;
+      return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
     }
 
     function selectHour(hour) {
@@ -310,6 +370,16 @@
       renderChart();
     });
     renderChart();
+
+    return function (averages, updatedAt) {
+      var previousCurrentHour = Math.floor(currentMinute / 60);
+      currentMinute = updatedAt.getHours() * 60 + updatedAt.getMinutes();
+      updateSlotAverages(averages, updatedAt);
+      if (mobileChart.matches && selectedHour === previousCurrentHour) {
+        selectHour(updatedAt.getHours());
+      }
+      renderChart();
+    };
   }
 
   var now = new Date();
@@ -333,21 +403,37 @@
     String(now.getMonth() + 1).padStart(2, "0"),
     String(now.getDate()).padStart(2, "0")
   ].join("-");
-  fetch("/operating-hours?day_of_week=" + now.getDay() + "&date=" + localDate, { credentials: "same-origin" })
-    .then(function (response) {
-      return response.json().then(function (body) {
-        if (!response.ok) {
-          throw new Error(body && body.error ? body.error : "Could not load today’s gym schedule.");
-        }
-        return body;
-      });
-    })
-    .then(function (rows) {
+  var updateHourlyChart = null;
+  Promise.all([
+    fetch("/operating-hours?day_of_week=" + now.getDay() + "&date=" + localDate, { credentials: "same-origin" })
+      .then(function (response) {
+        return response.json().then(function (body) {
+          if (!response.ok) {
+            throw new Error(body && body.error ? body.error : "Could not load today’s gym schedule.");
+          }
+          return body;
+        });
+      }),
+    fetchHourlyCapacity(localDate)
+  ])
+    .then(function (results) {
+      var rows = results[0];
+      var hourlyAverages = results[1];
       if (!Array.isArray(rows)) throw new Error("The operating-hours response was invalid.");
-      renderSchedule(rows, now);
+      updateHourlyChart = renderSchedule(rows, now, hourlyAverages);
     })
-    .catch(function () {
-      summary.textContent = "Today’s schedule is unavailable.";
-      setEmptyChart("Could not load gym hours.");
+    .catch(function (error) {
+      console.error("Could not load the schedule or hourly capacity data:", error);
+      summary.textContent = "Today’s schedule or live capacity data is unavailable.";
+      setEmptyChart("Could not load live hourly capacity.");
     });
+  window.setInterval(function () {
+    if (!updateHourlyChart) return;
+    fetchHourlyCapacity(localDate).then(function (hourlyAverages) {
+      updateHourlyChart(hourlyAverages, new Date());
+    }).catch(function (error) {
+      console.error("Could not refresh hourly capacity data:", error);
+      summary.textContent = "Hourly capacity could not be refreshed. Showing the latest loaded data.";
+    });
+  }, 60 * 1000);
 })();
