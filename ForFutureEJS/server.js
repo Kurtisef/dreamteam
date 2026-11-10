@@ -77,7 +77,7 @@ const plannedVisitSelect = [
   'cardio_machines',
 ].join(',');
 
-async function requestPlannedVisits({ profileId, method = 'GET', date, visitId, body } = {}) {
+async function requestPlannedVisits({ profileId, method = 'GET', date, visitId, beforeArrival, body } = {}) {
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     throw new Error('Planned visit database access is not configured.');
   }
@@ -86,6 +86,9 @@ async function requestPlannedVisits({ profileId, method = 'GET', date, visitId, 
   url.searchParams.set('select', plannedVisitSelect);
   if (profileId !== undefined) url.searchParams.set('profile_id', `eq.${profileId}`);
   if (visitId !== undefined) url.searchParams.set('planned_visit_id', `eq.${visitId}`);
+  if (beforeArrival !== undefined) {
+    url.searchParams.set('intended_arrival', `lt.${beforeArrival}`);
+  }
   if (date) {
     const nextDate = new Date(`${date}T00:00:00Z`);
     nextDate.setUTCDate(nextDate.getUTCDate() + 1);
@@ -175,6 +178,22 @@ function getGymClockParts() {
     minute: Number(values.minute),
     second: Number(values.second),
   };
+}
+
+async function deleteOldPlannedVisits() {
+  const gymNow = getGymClockParts();
+  const cutoffDate = new Date(`${gymNow.date}T00:00:00Z`);
+  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 7);
+  const cutoffDay = cutoffDate.toISOString().slice(0, 10);
+  const cutoffTime = [gymNow.hour, gymNow.minute, gymNow.second]
+    .map((part) => String(part).padStart(2, '0'))
+    .join(':');
+  const cutoff = `${cutoffDay}T${cutoffTime}`;
+
+  return requestPlannedVisits({
+    method: 'DELETE',
+    beforeArrival: cutoff,
+  });
 }
 
 function parsePlannedVisitInput(body) {
@@ -1142,4 +1161,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app };
+module.exports = { app, deleteOldPlannedVisits };
