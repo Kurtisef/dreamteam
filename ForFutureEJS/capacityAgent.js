@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createRequire } = require("node:module");
 
-const appDirectory = path.join(__dirname, "ForFutureEJS");
+const appDirectory = __dirname;
 const appRequire = createRequire(path.join(appDirectory, "package.json"));
 const cron = appRequire("node-cron");
 const { createClient } = appRequire("@supabase/supabase-js");
@@ -12,13 +12,12 @@ const { GoogleGenAI, Type } = appRequire("@google/genai");
 
 function loadEnvFile() {
   const candidates = [
-    path.join(__dirname, ".env"),
     path.join(appDirectory, ".env"),
   ];
   const envPaths = candidates.filter((candidate) => fs.existsSync(candidate));
 
   if (!envPaths.length) {
-    throw new Error("Could not find .env at the project root or in ForFutureEJS.");
+    throw new Error("Could not find .env in ForFutureEJS.");
   }
 
   if (typeof process.loadEnvFile === "function") {
