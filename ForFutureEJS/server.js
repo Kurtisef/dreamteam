@@ -118,6 +118,239 @@ async function insertTrafficEvent({ deskId, eventType, waitTimeMin }) {
   }
 }
 
+const GYM_TIME_ZONE = 'America/Denver';
+const MAX_GYM_CAPACITY = 135;
+
+function mountainDateParts(date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: GYM_TIME_ZONE,
+    year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date);
+  return Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+}
+
+function dateKeyFromParts(parts) {
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function shiftDateKey(key, days) {
+  const [year, month, day] = key.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(shifted.getUTCDate()).padStart(2, '0')}`;
+}
+
+function weekStartKey(key) {
+  const [year, month, day] = key.split('-').map(Number);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  return shiftDateKey(key, weekday === 0 ? -6 : 1 - weekday);
+}
+
+function mountainWallTime(dateKey, hour) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const wallTime = Date.UTC(year, month - 1, day, hour);
+  let timestamp = wallTime;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const parts = mountainDateParts(new Date(timestamp));
+    const observedWallTime = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour));
+    timestamp += wallTime - observedWallTime;
+  }
+  return timestamp;
+}
+
+async function readTrafficEventsSince(since) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Capacity history is not configured.');
+  }
+
+  const rows = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const url = new URL(`${supabaseUrl}/rest/v1/traffic_events`);
+    url.searchParams.set('select', 'event_type,created_at');
+    url.searchParams.set('created_at', `gte.${since.toISOString()}`);
+    url.searchParams.set('order', 'created_at.asc');
+    url.searchParams.set('limit', String(pageSize));
+    const response = await fetch(url, {
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        Range: `${offset}-${offset + pageSize - 1}`,
+      },
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(result?.message || `Could not read capacity history (${response.status}).`);
+    if (!Array.isArray(result)) throw new Error('Capacity history returned an unexpected response.');
+    rows.push(...result);
+    if (result.length < pageSize) break;
+  }
+  return rows;
+}
+
+async function readCapacityReadingsSince(since) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) throw new Error('Capacity snapshots are not configured.');
+  const rows = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const url = new URL(`${supabaseUrl}/rest/v1/capacity_logs`);
+    url.searchParams.set('select', 'recorded_at,current_headcount');
+    url.searchParams.set('recorded_at', `gte.${since.toISOString()}`);
+    url.searchParams.set('order', 'recorded_at.asc');
+    url.searchParams.set('limit', String(pageSize));
+    const response = await fetch(url, {
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        Range: `${offset}-${offset + pageSize - 1}`,
+      },
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(result?.message || `Could not read capacity snapshots (${response.status}).`);
+    if (!Array.isArray(result)) throw new Error('Capacity snapshots returned an unexpected response.');
+    rows.push(...result);
+    if (result.length < pageSize) break;
+  }
+  return rows;
+}
+
+async function getCurrentOccupancy(dateKey = dateKeyFromParts(mountainDateParts(new Date()))) {
+  const opening = mountainWallTime(dateKey, 6);
+  const events = await readTrafficEventsSince(new Date(opening));
+  let count = 0;
+  for (const event of events) {
+    if (!event.created_at || !['in', 'out'].includes(event.event_type)) continue;
+    const parts = mountainDateParts(new Date(event.created_at));
+    if (dateKeyFromParts(parts) !== dateKey || Number(parts.hour) < 6 || Number(parts.hour) >= 22) continue;
+    count = Math.max(0, Math.min(MAX_GYM_CAPACITY, count + (event.event_type === 'in' ? 1 : -1)));
+  }
+  return count;
+}
+
+async function insertCapacitySnapshot(sampledAt) {
+  const occupancy = await getCurrentOccupancy(dateKeyFromParts(mountainDateParts(sampledAt)));
+  const latestUrl = new URL(`${supabaseUrl}/rest/v1/capacity_logs`);
+  latestUrl.searchParams.set('select', 'outside_wait_mins,equipment_wait_mins');
+  latestUrl.searchParams.set('order', 'recorded_at.desc');
+  latestUrl.searchParams.set('limit', '1');
+  const latestResponse = await fetch(latestUrl, {
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    },
+  });
+  const latestRows = await latestResponse.json().catch(() => null);
+  if (!latestResponse.ok) throw new Error(latestRows?.message || 'Could not read the latest capacity log.');
+  const latest = Array.isArray(latestRows) ? latestRows[0] : null;
+  const response = await fetch(`${supabaseUrl}/rest/v1/capacity_logs`, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({
+      recorded_at: sampledAt.toISOString().slice(0, 19),
+      current_headcount: occupancy,
+      capacity_percentage: Math.round((occupancy / MAX_GYM_CAPACITY) * 100),
+      outside_wait_mins: latest?.outside_wait_mins ?? 0,
+      equipment_wait_mins: latest?.equipment_wait_mins ?? null,
+    }),
+  });
+  if (!response.ok) {
+    const responseText = await response.text();
+    let result;
+    try { result = responseText ? JSON.parse(responseText) : null; } catch { result = null; }
+    throw new Error(result?.message || result?.hint || `Capacity snapshot insert failed (${response.status}).`);
+  }
+}
+
+function isGymOpenAt(date) {
+  const parts = mountainDateParts(date);
+  const hour = Number(parts.hour);
+  const minute = Number(parts.minute || 0);
+  if (parts.weekday === 'Sun' || hour < 6 || hour >= 22) return false;
+  if (parts.weekday === 'Tue' && hour === 11) return false;
+  return minute % 15 === 0;
+}
+
+function scheduleCapacitySnapshot() {
+  if (!supabaseUrl || !supabaseServiceRoleKey) return;
+  const now = Date.now();
+  let next = Math.floor(now / 900000) * 900000 + 900000;
+  while (!isGymOpenAt(new Date(next))) next += 900000;
+  setTimeout(async () => {
+    try {
+      await insertCapacitySnapshot(new Date(next));
+    } catch (error) {
+      console.error('Capacity snapshot failed:', error.message);
+    } finally {
+      scheduleCapacitySnapshot();
+    }
+  }, Math.max(0, next - Date.now()));
+}
+
+async function buildWeekCapacity() {
+  const now = new Date();
+  const nowParts = mountainDateParts(now);
+  const todayKey = dateKeyFromParts(nowParts);
+  const startKey = weekStartKey(todayKey);
+  const since = new Date(`${shiftDateKey(startKey, -35)}T00:00:00-07:00`);
+  const snapshots = await readCapacityReadingsSince(since);
+  const quarterHours = new Map();
+  for (const snapshot of snapshots) {
+    const timestamp = snapshot.recorded_at.endsWith('Z') || /[+-]\d\d:\d\d$/.test(snapshot.recorded_at)
+      ? snapshot.recorded_at
+      : `${snapshot.recorded_at}Z`;
+    const parts = mountainDateParts(new Date(timestamp));
+    const date = dateKeyFromParts(parts);
+    const hour = Number(parts.hour);
+    const minute = Number(parts.minute);
+    if (hour < 6 || hour > 21 || minute % 15 !== 0) continue;
+    const key = `${date}:${hour}`;
+    if (!quarterHours.has(key)) quarterHours.set(key, new Map());
+    quarterHours.get(key).set(minute, Number(snapshot.current_headcount));
+  }
+
+  const getHourlyAverage = (date, hour) => {
+    const readings = quarterHours.get(`${date}:${hour}`);
+    if (!readings || [0, 15, 30, 45].some(minute => !readings.has(minute))) return null;
+    return { value: [0, 15, 30, 45].reduce((sum, minute) => sum + readings.get(minute), 0) / 4 };
+  };
+  const todayIndex = new Date(Date.UTC(
+    Number(todayKey.slice(0, 4)), Number(todayKey.slice(5, 7)) - 1, Number(todayKey.slice(8, 10))
+  )).getUTCDay();
+
+  const days = {};
+  for (let day = 0; day < 6; day++) {
+    const date = shiftDateKey(startKey, day);
+    const forecastDate = date >= todayKey && !(date === todayKey && Number(nowParts.hour) >= 22);
+    days[date] = {};
+    for (let hour = 6; hour <= 21; hour++) {
+      if (day === 1 && hour === 11) {
+        days[date][hour] = { closed: true, source: 'closed' };
+        continue;
+      }
+      const hourIsPast = date < todayKey || (date === todayKey && hour < Number(nowParts.hour));
+      if (!forecastDate || hourIsPast) {
+        const actual = getHourlyAverage(date, hour);
+        days[date][hour] = actual ? { ...actual, source: 'actual' } : null;
+        continue;
+      }
+
+      const priorValues = [];
+      for (let weeksAgo = 1; weeksAgo <= 4; weeksAgo++) {
+        const prior = getHourlyAverage(shiftDateKey(date, -7 * weeksAgo), hour);
+        if (prior) priorValues.push(prior.value);
+      }
+      days[date][hour] = priorValues.length
+        ? { value: priorValues.reduce((sum, value) => sum + value, 0) / priorValues.length, samples: priorValues.length, source: 'forecast' }
+        : null;
+    }
+  }
+
+  return { weekStart: startKey, today: todayKey, todayIndex: todayIndex === 0 ? 6 : todayIndex - 1, currentHour: Number(nowParts.hour), days };
+}
+
 function getCookie(req, name) {
   const cookieHeader = req.headers.cookie || '';
   for (const item of cookieHeader.split(';')) {
@@ -280,6 +513,26 @@ app.post('/admin/events', async (req, res) => {
   }
 });
 
+app.get('/api/week-capacity', async (req, res) => {
+  try {
+    return res.json(await buildWeekCapacity());
+  } catch (error) {
+    console.error('Week capacity load failed:', error);
+    return res.status(503).json({ error: 'Capacity history is temporarily unavailable.' });
+  }
+});
+
+app.get('/admin/current-count', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  try {
+    return res.json({ count: await getCurrentOccupancy() });
+  } catch (error) {
+    console.error('Current capacity load failed:', error);
+    return res.status(503).json({ error: 'Could not load the current count.' });
+  }
+});
+
 app.post('/logout', (req, res) => {
   const sessionId = getCookie(req, SESSION_COOKIE);
   if (sessionId) profileSessions.delete(sessionId);
@@ -323,6 +576,7 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   app.listen(port, () => {
     console.log(`BYU Gym Planner server listening on http://localhost:${port}`);
+    scheduleCapacitySnapshot();
     if (!supabaseUrl || !supabasePublishableKey) {
       console.log('Supabase profile login is not configured; set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in .env.');
     }

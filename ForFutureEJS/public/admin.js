@@ -13,7 +13,11 @@
   var logList = document.getElementById("log-list");
 
   var inside = 0;
+  var maxCapacity = 135;
   var pendingEvent = null; // the check in waiting for an optional wait time
+
+  btnIn.disabled = true;
+  btnOut.disabled = true;
 
   function saveEvent(event) {
     return fetch("/admin/events", {
@@ -92,6 +96,10 @@
   }
 
   btnIn.addEventListener("click", function () {
+    if (inside >= maxCapacity) {
+      setMsg("The gym is at its 135-person capacity.", "err");
+      return;
+    }
     inside += 1;
     render();
     setMsg("Enter the wait time or skip to save the check in.", "");
@@ -146,4 +154,18 @@
   });
 
   render();
+  fetch("/admin/current-count", { credentials: "same-origin" })
+    .then(function (response) {
+      if (!response.ok) throw new Error("Could not load the current count.");
+      return response.json();
+    })
+    .then(function (data) {
+      inside = Math.max(0, Math.min(maxCapacity, Number(data.count) || 0));
+      render();
+      btnIn.disabled = false;
+      btnOut.disabled = false;
+    })
+    .catch(function () {
+      setMsg("Could not load today's count. Refresh or contact the administrator.", "err");
+    });
 })();

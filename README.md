@@ -1,7 +1,7 @@
 # IS 401 Semester Project
 
 ## App Summary:
-The BYU Gym Planner solves the daily frustration of arriving at the campus recreation facilities only to find overcrowded weight floors and long lines for equipment. This problem is primarily experienced by BYU students, faculty, and staff trying to fit workouts into tight academic schedules. Our application provides real-time visibility into the gym's status by displaying live capacity percentages, estimated wait times for entry and equipment, and active camera stream statuses. It offers a predictive "Week View" that forecasts the quietest hours based on an 8-week historical rolling average. Finally, users can submit their email address to their profile for future account features.
+The BYU Gym Planner helps students, faculty, and staff plan visits to the campus recreation facilities. Admins record gym entries and exits. While the gym is open, the server saves a capacity snapshot every 15 minutes; the Week view averages the four snapshots in each completed hour and forecasts matching weekday hours from up to the previous four weeks. Forecast cells are green at 0–45 people, yellow above 45 through 90, and red above 90 through the 135-person maximum. Finally, users can submit their email address to their profile for future account features.
 
 ## ERD
 ![Gym Tracker ERD](ERD.png)

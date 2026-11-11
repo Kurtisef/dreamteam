@@ -35,6 +35,10 @@ Copy the project URL and publishable key from the Supabase dashboard. The admin 
 
 The `profiles` table must allow the required `select` and `insert` operations through Supabase's Data API and its Row Level Security policies. The application sends the display name and email to Supabase when creating a profile, and looks for an exact match when logging in.
 
+## Week capacity snapshots
+
+The server writes 15-minute capacity snapshots into the existing `capacity_logs` table. It uses the admin's entry/exit count for `current_headcount`, derives `capacity_percentage` from the 135-person maximum, and carries forward the latest wait-time values. Sampling runs from 6 AM to 10 PM Mountain time, Monday through Saturday (excluding Tuesday 11 AM–12 PM). A completed hour is averaged only when all four quarter-hour snapshots exist. Future hours use the average hourly values from up to the previous four matching weekdays.
+
 ## Profile login behavior
 
 This version intentionally uses the simple profile lookup from the HTML site, not Supabase Auth. A profile consists of a display name and email; there is no password or email ownership check. After a match, Express stores the profile in a temporary in-memory session and sends the browser an HttpOnly session cookie. Sessions are cleared when the Node server restarts.

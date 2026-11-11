@@ -113,7 +113,9 @@ p {
 }
 
 .tabs a {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 10px 16px;
   color: #B9CBE6;
   border-bottom: 3px solid transparent;
@@ -556,6 +558,20 @@ main {
   margin: 4px 0 16px;
 }
 
+.week-offline {
+  display: none;
+  min-height: 360px;
+  place-items: center;
+  color: var(--ink);
+  font-size: clamp(2rem, 7vw, 4rem);
+  font-weight: 700;
+  text-align: center;
+}
+
+#s-off:checked ~ .app .week-offline { display: grid; }
+#s-off:checked ~ .app .week .tips,
+#s-off:checked ~ .app .week .card { display: none; }
+
 .tips {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -584,6 +600,8 @@ main {
   min-width: 480px;
 }
 
+.mobile-day-picker { display: none; }
+
 .heat .dh {
   text-align: center;
   line-height: 1.2;
@@ -591,13 +609,17 @@ main {
 }
 
 .dh b { display: block; }
-.dh small { color: var(--mute); font-size: .72rem; }
+.dh small { display: block; color: var(--mute); font-size: .72rem; font-weight: 400; }
 
 .dh.today b {
   color: var(--ink);
-  text-decoration: underline;
-  text-underline-offset: 4px;
-  text-decoration-thickness: 2px;
+}
+
+@media (min-width: 721px) {
+  .dh.today {
+    border: 1px solid #fff;
+    border-radius: 8px;
+  }
 }
 
 .heat .h {
@@ -618,14 +640,16 @@ main {
 .l5 { background: var(--hot); }
 
 .p {
-  background-image: repeating-linear-gradient(
-    135deg,
-    var(--hatch) 0 2px,
-    transparent 2px 7px
-  );
-  outline: 1.5px dashed var(--mute);
-  outline-offset: -2px;
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 4px, rgba(5, 24, 45, .48) 4px 6px),
+    linear-gradient(135deg, rgba(5, 24, 45, .22), rgba(5, 24, 45, .58));
+  border: 1px solid rgba(5, 24, 45, .7);
+  box-shadow: inset 0 0 0 1px rgba(5, 24, 45, .22);
 }
+
+.capacity-green { background-color: var(--go); }
+.capacity-yellow { background-color: var(--mid); }
+.capacity-red { background-color: var(--hot); }
 
 .x { background: var(--line); }
 
@@ -669,6 +693,19 @@ main {
   border-radius: 4px;
 }
 
+.legend .predicted-sample {
+  background-color: #8995a3;
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 4px, rgba(5, 24, 45, .48) 4px 6px),
+    linear-gradient(135deg, rgba(5, 24, 45, .22), rgba(5, 24, 45, .58));
+  border: 1px solid rgba(5, 24, 45, .7);
+  box-shadow: inset 0 0 0 1px rgba(5, 24, 45, .22);
+}
+
+.legend .capacity-green { background: var(--go); }
+.legend .capacity-yellow { background: var(--mid); }
+.legend .capacity-red { background: var(--hot); }
+
 .note {
   margin-top: 10px;
   color: var(--mute);
@@ -677,9 +714,45 @@ main {
 
 /* Responsive layout for smaller screens */
 @media (max-width: 720px) {
+  .tabs a {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-right: 4px;
+    padding-left: 4px;
+    text-align: center;
+  }
   .hero { grid-template-columns: 1fr; }
   .verdict { font-size: 2rem; }
   .bars { gap: 6px; }
+  .week .card { padding: 14px; }
+  .mobile-day-picker {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+  .mobile-day-picker select {
+    min-width: 140px;
+    padding: 8px 34px 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+  }
+  .week .scroll { overflow: visible; }
+  .week .heat {
+    grid-template-columns: 52px minmax(0, 1fr);
+    min-width: 0;
+  }
+  .week .heat > .dh:not([data-day]),
+  .week .heat > .dh[data-day]:not(.active-day),
+  .week .heat > .sun { display: none; }
+  .week .heat > .h { grid-column: 1; }
+  .week .heat > .dh.active-day,
+  .week .heat > i.active-day { grid-column: 2; }
+  .week .heat > i:not(.active-day) { display: none; }
 }
 
 /* Login button in the header */
