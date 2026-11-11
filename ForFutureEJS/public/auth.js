@@ -3,6 +3,8 @@
   const form = document.getElementById('auth-form');
   const message = document.getElementById('auth-msg');
   const modeInput = document.getElementById('auth-mode');
+  const emailInput = document.getElementById('auth-email');
+  const passwordInput = document.getElementById('auth-password');
   const title = document.getElementById('auth-title');
   const submit = document.getElementById('auth-submit');
   const toggle = document.getElementById('auth-toggle');
@@ -16,6 +18,9 @@
     modeInput.value = creating ? 'create' : 'login';
     title.textContent = creating ? 'Create profile' : 'Log in';
     submit.textContent = creating ? 'Save profile' : 'Log in';
+    passwordInput.autocomplete = creating ? 'new-password' : 'current-password';
+    if (creating) passwordInput.minLength = 8;
+    else passwordInput.removeAttribute('minlength');
     toggle.textContent = creating
       ? 'Already have a profile? Log in'
       : 'New here? Create a profile';
@@ -46,6 +51,24 @@
 
   toggle?.addEventListener('click', () => {
     setMode(modeInput.value === 'login' ? 'create' : 'login');
+  });
+
+  form.addEventListener('submit', (event) => {
+    emailInput.value = emailInput.value.trim().toLowerCase();
+    if (!emailInput.validity.valid) {
+      event.preventDefault();
+      message.textContent = 'Enter a valid email address.';
+      message.className = 'err';
+      emailInput.focus();
+      return;
+    }
+
+    if (modeInput.value === 'create' && passwordInput.value.length < 8) {
+      event.preventDefault();
+      message.textContent = 'Choose a password with at least 8 characters.';
+      message.className = 'err';
+      passwordInput.focus();
+    }
   });
 
   document.getElementById('auth-close')?.addEventListener('click', () => dialog.close());
@@ -85,10 +108,6 @@
       adminMessage.className = 'err';
     }
     window.history.replaceState({}, '', window.location.pathname);
-  } else if (loginButton?.dataset.loggedIn !== 'true') {
-    setMode('login');
-    if (!dialog.open) dialog.showModal();
   }
 
 })();
-

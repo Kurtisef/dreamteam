@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('node:fs');
 const path = require('path');
 const crypto = require('crypto');
+const { promisify } = require('node:util');
 
 const envPath = path.join(__dirname, '.env');
 if (typeof process.loadEnvFile === 'function' && fs.existsSync(envPath)) {
@@ -11,8 +12,8 @@ if (typeof process.loadEnvFile === 'function' && fs.existsSync(envPath)) {
 const app = express();
 const port = Number(process.env.PORT) || 3000;
 const supabaseUrl = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
-const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const scryptAsync = promisify(crypto.scrypt);
 const gymTimeZone = process.env.GYM_TIME_ZONE || 'America/Denver';
 const gymDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: gymTimeZone,
@@ -35,20 +36,22 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Read a profile from the Supabase Data API using the public project key.
-// This is the same profile lookup model as the HTML version, not Supabase Auth.
+// Profile lookups and password writes stay server-side because they use the service-role key.
 async function requestProfiles({ method = 'GET', filters = {}, body } = {}) {
-  if (!supabaseUrl || !supabasePublishableKey) {
-    throw new Error('Supabase is not configured. Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in .env.');
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Profile database access is not configured.');
   }
 
   const url = new URL(`${supabaseUrl}/rest/v1/profiles`);
-  url.searchParams.set('select', '*');
+  url.searchParams.set('select', 'profile_id,display_name,email,profile_password');
   for (const [key, value] of Object.entries(filters)) {
     url.searchParams.set(key, value);
   }
 
-  const headers = { apikey: supabasePublishableKey };
+  const headers = {
+    apikey: supabaseServiceRoleKey,
+    Authorization: `Bearer ${supabaseServiceRoleKey}`,
+  };
   const options = { method, headers };
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
@@ -66,9 +69,40 @@ async function requestProfiles({ method = 'GET', filters = {}, body } = {}) {
 
   if (!response.ok) {
     const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
-    throw new Error(message);
+    const error = new Error(message);
+    error.code = result?.code;
+    throw error;
   }
   return result;
+}
+
+function normalizeProfileEmail(value) {
+  const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (
+    email.length > 254
+    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  ) {
+    throw new Error('Enter a valid email address.');
+  }
+  return email;
+}
+
+async function hashProfilePassword(password) {
+  const salt = crypto.randomBytes(16);
+  const derivedKey = await scryptAsync(password, salt, 64);
+  return `scrypt$${salt.toString('hex')}$${derivedKey.toString('hex')}`;
+}
+
+async function verifyProfilePassword(password, storedHash) {
+  const match = typeof storedHash === 'string'
+    ? /^scrypt\$([a-f0-9]{32})\$([a-f0-9]{128})$/i.exec(storedHash)
+    : null;
+  if (!match) return false;
+
+  const salt = Buffer.from(match[1], 'hex');
+  const expectedKey = Buffer.from(match[2], 'hex');
+  const actualKey = await scryptAsync(password, salt, expectedKey.length);
+  return crypto.timingSafeEqual(expectedKey, actualKey);
 }
 
 const plannedVisitSelect = [
@@ -1032,34 +1066,76 @@ app.delete('/plan/visits/:visitId', async (req, res) => {
 });
 
 app.post('/login', async (req, res) => {
-  const displayName = typeof req.body.display_name === 'string' ? req.body.display_name.trim() : '';
-  const email = typeof req.body.email === 'string' ? req.body.email.trim() : '';
+  let email;
+  try {
+    email = normalizeProfileEmail(req.body.email);
+  } catch (error) {
+    return redirectWithAuthError(res, safeReturnPath(req.body.return_to), error);
+  }
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
   const mode = req.body.mode === 'create' ? 'create' : 'login';
   const returnPath = safeReturnPath(req.body.return_to);
 
-  if (!displayName || !email) {
-    return redirectWithAuthError(res, returnPath, new Error('Enter a username and email address.'));
+  if (!password || Buffer.byteLength(password, 'utf8') > 1024) {
+    return redirectWithAuthError(res, returnPath, new Error('Enter a valid password.'));
+  }
+  if (mode === 'create' && password.length < 8) {
+    return redirectWithAuthError(res, returnPath, new Error('Choose a password with at least 8 characters.'));
   }
 
   try {
     let profile;
     if (mode === 'create') {
-      const created = await requestProfiles({
-        method: 'POST',
-        body: { display_name: displayName, email },
+      const existing = await requestProfiles({
+        filters: { email: `eq.${email}`, limit: '1' },
       });
-      profile = Array.isArray(created) ? created[0] : created;
+      const displayName = email.slice(0, email.indexOf('@'));
+      const passwordHash = await hashProfilePassword(password);
+      if (Array.isArray(existing) && existing.length) {
+        const existingProfile = existing[0];
+        if (existingProfile.profile_password || !existingProfile.profile_id) {
+          return redirectWithAuthError(
+            res,
+            returnPath,
+            new Error('An account with that email already exists. Log in instead.')
+          );
+        }
+        const updated = await requestProfiles({
+          method: 'PATCH',
+          filters: {
+            profile_id: `eq.${existingProfile.profile_id}`,
+            profile_password: 'is.null',
+          },
+          body: { display_name: displayName, profile_password: passwordHash },
+        });
+        profile = Array.isArray(updated) ? updated[0] : null;
+        if (!profile) {
+          return redirectWithAuthError(
+            res,
+            returnPath,
+            new Error('An account with that email already exists. Log in instead.')
+          );
+        }
+      } else {
+        const created = await requestProfiles({
+          method: 'POST',
+          body: { display_name: displayName, email, profile_password: passwordHash },
+        });
+        profile = Array.isArray(created) ? created[0] : created;
+      }
       if (!profile) throw new Error('Supabase did not return the new profile.');
     } else {
       const matches = await requestProfiles({
-        filters: {
-          display_name: `eq.${displayName}`,
-          email: `eq.${email}`,
-          limit: '1',
-        },
+        filters: { email: `eq.${email}`, limit: '1' },
       });
       profile = Array.isArray(matches) ? matches[0] : null;
-      if (!profile) throw new Error('No profile matches that username and email.');
+      if (!profile || !(await verifyProfilePassword(password, profile.profile_password))) {
+        return redirectWithAuthError(
+          res,
+          returnPath,
+          new Error('Email or password is incorrect.')
+        );
+      }
     }
 
     const sessionId = crypto.randomBytes(32).toString('hex');
@@ -1067,12 +1143,27 @@ app.post('/login', async (req, res) => {
       profile_id: profile.profile_id || profile.id || null,
       display_name: profile.display_name,
       email: profile.email,
-      role: profile.role === 'admin' ? 'admin' : 'user',
+      role: 'user',
     };
     profileSessions.set(sessionId, { profile: user, expiresAt: Date.now() + SESSION_LIFETIME_MS });
     setSessionCookie(res, sessionId);
     return res.redirect(returnPath);
   } catch (error) {
+    if (error.code === '23505') {
+      return redirectWithAuthError(
+        res,
+        returnPath,
+        new Error('An account with that email already exists. Log in instead.')
+      );
+    }
+    console.error('Profile authentication failed:', error);
+    if (mode === 'login') {
+      return redirectWithAuthError(
+        res,
+        returnPath,
+        new Error(`Could not connect to the profiles table: ${error.message}`)
+      );
+    }
     return redirectWithAuthError(res, returnPath, error);
   }
 });
@@ -1262,8 +1353,8 @@ if (require.main === module) {
   app.listen(port, () => {
     console.log(`BYU Gym Planner server listening on http://localhost:${port}`);
     scheduleCapacitySnapshot();
-    if (!supabaseUrl || !supabasePublishableKey) {
-      console.log('Supabase profile login is not configured; set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in .env.');
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+      console.log('Supabase profile login is not configured; set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.');
     }
   });
 }
