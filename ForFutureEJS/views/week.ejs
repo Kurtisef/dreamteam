@@ -37,21 +37,30 @@
   <section class="screen week" aria-label="Week view">
     <h2>Week view</h2>
     <p class="lead">Pick your quietest hour. Solid squares are what happened. Striped squares are predictions.</p>
+    <div class="banner st-off" role="alert"><b>Live estimates are unavailable.</b> The gym's sensors aren't sending data right now.</div>
+    <div class="week-offline" role="status" aria-live="polite">Connection error</div>
     <div class="tips">
-      <div class="tip"><b>Quietest</b>Fri 9 to 11 AM (predicted)</div>
-      <div class="tip"><b>Also quiet</b>Sat after 4 PM (predicted)</div>
-      <div class="tip t-hot"><b>Busiest</b>Mon to Wed, 5 to 7 PM</div>
+      <div class="tip"><b>Best Time</b>Fri 9 to 11 AM (predicted)</div>
+      <div class="tip"><b>Second Best Time</b>Sat after 4 PM (predicted)</div>
+      <div class="tip t-hot"><b>Busiest Time</b>Mon to Wed, 5 to 7 PM</div>
     </div>
     <div class="card">
+      <label class="mobile-day-picker" for="mobile-day">Choose a day
+        <select id="mobile-day" aria-label="Choose a day">
+          <option value="0">Monday</option><option value="1">Tuesday</option>
+          <option value="2">Wednesday</option><option value="3">Thursday</option>
+          <option value="4">Friday</option><option value="5">Saturday</option>
+        </select>
+      </label>
       <div class="scroll">
-      <div class="heat" role="img" aria-label="Gym capacity by day and hour, Monday to Saturday">
+      <div class="heat" aria-label="Gym capacity by day and hour, Monday to Saturday">
         <span></span>
-        <div class="dh"><b>Mon</b><small>Actual</small></div>
-        <div class="dh"><b>Tue</b><small>Actual</small></div>
-        <div class="dh"><b>Wed</b><small>Actual</small></div>
-        <div class="dh today"><b>Thu</b><small>Today</small></div>
-        <div class="dh"><b>Fri</b><small>Forecast</small></div>
-        <div class="dh"><b>Sat</b><small>Forecast</small></div>
+        <div class="dh" data-day="0"><b>Mon</b><small>Actual</small></div>
+        <div class="dh" data-day="1"><b>Tue</b><small>Actual</small></div>
+        <div class="dh" data-day="2"><b>Wed</b><small>Actual</small></div>
+        <div class="dh" data-day="3"><b>Thu</b><small>Forecast</small></div>
+        <div class="dh" data-day="4"><b>Fri</b><small>Forecast</small></div>
+        <div class="dh" data-day="5"><b>Sat</b><small>Forecast</small></div>
         <div class="dh"><b>Sun</b><small>Closed</small></div>
         <div class="sun">Closed all day</div>
 
@@ -74,9 +83,10 @@
       </div>
       </div>
       <div class="legend">
-        <span><i class="l1"></i>Quiet</span><span><i class="l3"></i>Moderate</span><span><i class="l5"></i>Packed</span>
-        <span><i class="l3 p"></i>Predicted</span><span><i class="x"></i>Closed</span>
+        <span><i class="capacity-green"></i>Green: 0–45</span><span><i class="capacity-yellow"></i>Yellow: &gt;45–90</span><span><i class="capacity-red"></i>Red: &gt;90–135</span>
+        <span><i class="predicted-sample"></i>Predicted</span><span><i class="x"></i>Closed</span>
       </div>
+      <p class="note" id="week-data-status" role="status" aria-live="polite">Loading capacity history…</p>
       <p class="note">Sunday is left out on purpose: the gym is closed all day, so there is no data to show.</p>
     </div>
   </section>
@@ -84,5 +94,94 @@
 </div>
 <%- include('partials/auth-dialog') %>
 <script src="/auth.js" defer></script>
+<script>
+  const heat = document.querySelector('.heat');
+  const dayPicker = document.querySelector('#mobile-day');
+  const gridItems = [...heat.children];
+  const today = new Date().getDay();
+  let todayIndex = today === 0 ? -1 : today - 1;
+
+  for (let row = 0; row < 16; row++) {
+    const firstCell = 9 + row * 7;
+    gridItems[firstCell].style.gridRow = String(row + 2);
+    for (let day = 0; day < 6; day++) {
+      const cell = gridItems[firstCell + day + 1];
+      cell.classList.add(`day-${day}`);
+      cell.dataset.day = String(day);
+      cell.dataset.hour = String(row + 6);
+      cell.style.gridRow = String(row + 2);
+    }
+  }
+
+  function selectDay(day) {
+    heat.dataset.selectedDay = String(day);
+    heat.querySelectorAll('.dh[data-day]').forEach(header => {
+      const index = Number(header.dataset.day);
+      header.classList.toggle('active-day', index === day);
+      header.classList.toggle('today', index === todayIndex);
+      header.querySelector('small').textContent = index === todayIndex
+        ? 'Today'
+        : index < todayIndex ? 'Actual' : 'Forecast';
+    });
+    gridItems.forEach(item => {
+      const cellDay = [...item.classList].find(name => /^day-[0-5]$/.test(name));
+      if (cellDay) item.classList.toggle('active-day', Number(cellDay.slice(-1)) === day);
+    });
+  }
+
+  const initialDay = today === 0 ? 5 : today - 1;
+  dayPicker.value = String(initialDay);
+  selectDay(initialDay);
+  dayPicker.addEventListener('change', () => selectDay(Number(dayPicker.value)));
+
+  const capacityStatus = document.querySelector('#week-data-status');
+  fetch('/api/week-capacity')
+    .then(response => {
+      if (!response.ok) throw new Error('Capacity history unavailable');
+      return response.json();
+    })
+    .then(data => {
+      todayIndex = data.todayIndex;
+      const dateParts = data.weekStart.split('-').map(Number);
+      for (let day = 0; day < 6; day++) {
+        const date = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2] + day));
+        const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+        const header = heat.querySelector(`.dh[data-day="${day}"]`);
+        header.classList.toggle('today', key === data.today);
+        const hourLabel = header.querySelector('small');
+        hourLabel.textContent = key === data.today ? 'Today' : key < data.today ? 'Actual' : 'Forecast';
+
+        for (let hour = 6; hour <= 21; hour++) {
+          const cell = heat.querySelector(`i[data-day="${day}"][data-hour="${hour}"]`);
+          const item = data.days[key]?.[hour];
+          cell.className = `day-${day}`;
+          if (item?.closed) {
+            cell.classList.add('x');
+            cell.title = 'Gym closed';
+            cell.setAttribute('aria-label', 'Gym closed');
+            continue;
+          }
+          if (!item || !Number.isFinite(item.value)) {
+            cell.title = 'No capacity data for this hour';
+            continue;
+          }
+          const people = Math.max(0, Math.min(135, item.value));
+          cell.classList.add(people <= 45 ? 'capacity-green' : people <= 90 ? 'capacity-yellow' : 'capacity-red');
+          if (item.source === 'forecast') cell.classList.add('p');
+          cell.title = `${item.source === 'forecast' ? 'Forecast average' : 'Recorded average'}: ${people.toFixed(1)} people${item.source === 'forecast' ? `, based on ${item.samples} prior week${item.samples === 1 ? '' : 's'}` : ''}`;
+          cell.setAttribute('aria-label', cell.title);
+        }
+      }
+      const selectedDay = data.todayIndex > 5 ? 5 : data.todayIndex;
+      dayPicker.value = String(selectedDay);
+      selectDay(selectedDay);
+      capacityStatus.textContent = 'Each completed hour averages its four 15-minute counts. Forecasts average that hour from up to the previous four matching weekdays. Colors: green 0–45, yellow over 45–90, red over 90–135 people.';
+    })
+    .catch(() => {
+      capacityStatus.textContent = 'Capacity snapshots are unavailable. Check the Supabase connection and capacity_logs table permissions.';
+      heat.querySelectorAll('i[data-day]').forEach(cell => { cell.className = `day-${cell.dataset.day}`; });
+    });
+
+</script>
 </body>
 </html>

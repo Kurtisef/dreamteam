@@ -17,20 +17,11 @@
   var logList = document.getElementById("log-list");
 
   var inside = 0;
-  var pendingEvent = null;
+  var maxCapacity = 135;
+  var pendingEvent = null; // the check in waiting for an optional wait time
 
-  function requestJSON(url, options) {
-    return fetch(url, options).then(function (response) {
-      return response.json().catch(function () {
-        return null;
-      }).then(function (body) {
-        if (!response.ok) {
-          throw new Error(body && body.error ? body.error : "The request could not be completed.");
-        }
-        return body;
-      });
-    });
-  }
+  btnIn.disabled = true;
+  btnOut.disabled = true;
 
   function saveEvent(event) {
     return requestJSON("/admin/events", {
@@ -152,8 +143,14 @@
   }
 
   btnIn.addEventListener("click", function () {
-    pendingEvent = { type: "in", waitMinutes: null };
-    setMsg("Enter a wait time, or leave it blank if it wasn't recorded.", "");
+    if (inside >= maxCapacity) {
+      setMsg("The gym is at its 135-person capacity.", "err");
+      return;
+    }
+    inside += 1;
+    render();
+    setMsg("Enter the wait time or skip to save the check in.", "");
+    pendingEvent = { type: "in", waitMinutes: null, at: new Date().toISOString() };
     openPanel();
   });
 
@@ -218,45 +215,19 @@
     });
   });
 
-  document.addEventListener("keydown", function (event) {
-    var target = event.target;
-    var tagName = target && target.tagName ? target.tagName.toLowerCase() : "";
-    var isTextEntry = tagName === "input"
-      || tagName === "textarea"
-      || tagName === "select"
-      || (target && target.isContentEditable);
-
-    if (
-      !event.altKey
-      && !event.ctrlKey
-      && !event.metaKey
-      && !isTextEntry
-      && panel.hidden
-      && closeConfirm.hidden
-      && !btnIn.disabled
-      && !btnOut.disabled
-    ) {
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        btnIn.click();
-      } else if (event.key === "ArrowDown") {
-        event.preventDefault();
-        btnOut.click();
-      }
-    }
-
-    if (event.key === "Escape" && !closeConfirm.hidden) {
-      closeConfirm.hidden = true;
-      btnCloseGym.focus();
-    }
-  });
-
-  setBusy(true);
-  setMsg("Loading gym activity...", "");
-  loadState().then(function () {
-    setMsg("", "");
-    setBusy(false);
-  }).catch(function () {
-    setMsg("Could not load gym activity. Refresh the page to try again.", "err");
-  });
+  render();
+  fetch("/admin/current-count", { credentials: "same-origin" })
+    .then(function (response) {
+      if (!response.ok) throw new Error("Could not load the current count.");
+      return response.json();
+    })
+    .then(function (data) {
+      inside = Math.max(0, Math.min(maxCapacity, Number(data.count) || 0));
+      render();
+      btnIn.disabled = false;
+      btnOut.disabled = false;
+    })
+    .catch(function () {
+      setMsg("Could not load today's count. Refresh or contact the administrator.", "err");
+    });
 })();
