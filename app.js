@@ -1,11 +1,7 @@
 (() => {
   const SUPABASE_URL = "https://buvvmpodmcfcjgzglmsw.supabase.co";
-  const SUPABASE_PUBLISHABLE_KEY =
-    "sb_publishable_xMx7SkOGDda30kzYxwrtpA_K6wmmmN6";
-  const sb = window.supabase.createClient(
-    SUPABASE_URL,
-    SUPABASE_PUBLISHABLE_KEY
-  );
+  const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_xMx7SkOGDda30kzYxwrtpA_K6wmmmN6";
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
   window.sb = sb;
 
   const $ = (id) => document.getElementById(id);
@@ -13,114 +9,141 @@
   const form = $("auth-form");
   const msg = $("auth-msg");
   let mode = "login";
+  let activeUser = null;
+  let refreshVersion = 0;
 
   function showMsg(text, isError = true) {
     msg.textContent = text;
     msg.className = isError ? "err" : "ok";
   }
 
-  function setMode(newMode) {
-    mode = newMode;
-    const creating = newMode === "create";
+  function setMode(nextMode) {
+    mode = nextMode;
+    const creating = mode === "create";
     $("auth-title").textContent = creating ? "Create profile" : "Log in";
-    $("auth-submit").textContent = creating ? "Save profile" : "Log in";
+    $("auth-submit").textContent = creating ? "Create profile" : "Log in";
     $("auth-toggle").textContent = creating
-      ? "Already have a profile? Log in"
+      ? "Already have an account? Log in"
       : "New here? Create a profile";
+    $("auth-password").autocomplete = creating ? "new-password" : "current-password";
     msg.textContent = "";
     msg.className = "";
   }
 
-  function setLoggedIn(profile) {
-    sessionStorage.setItem("profile", JSON.stringify(profile));
-    $("auth-user").textContent = `Logged in as ${profile.display_name}`;
-    $("auth-btn").textContent = "Log out";
-    
-    // --> ADD THIS LINE HERE <--
-    if (typeof window.syncPlanAuthState === 'function') window.syncPlanAuthState();
-  }
-
-  function logOut() {
-    sessionStorage.removeItem("profile");
+  function showLoggedOut() {
+    activeUser = null;
     $("auth-user").textContent = "";
-    $("auth-btn").textContent = "Log out";
-    
-    // --> AND ADD THIS LINE HERE <--
-    if (typeof window.syncPlanAuthState === 'function') window.syncPlanAuthState();
+    $("auth-btn").textContent = "Log in";
+    window.currentGymProfile = null;
+    if (typeof window.syncPlanAuthState === "function") window.syncPlanAuthState();
   }
 
-  $("auth-toggle").addEventListener("click", () =>
-    setMode(mode === "login" ? "create" : "login")
-  );
-
-  $("auth-btn").addEventListener("click", () => {
-    if (sessionStorage.getItem("profile")) {
-      logOut();
+  // The SQL function only links a profile after Supabase verifies the user's email.
+  async function loadAuthenticatedProfile() {
+    const version = ++refreshVersion;
+    const { data: { user }, error: userError } = await sb.auth.getUser();
+    if (version !== refreshVersion) return;
+    if (userError || !user) {
+      showLoggedOut();
       return;
     }
-    setMode("login");
-    dialog.showModal();
-  });
 
-  $("auth-close").addEventListener("click", () => dialog.close());
-  dialog.addEventListener("close", () => {
-    form.reset();
-    msg.textContent = "";
+    const { data: profileId, error: linkError } = await sb.rpc("ensure_my_profile");
+    if (version !== refreshVersion) return;
+    if (linkError) {
+      console.error("Profile linking error:", linkError);
+      showLoggedOut();
+      showMsg(linkError.message || "Unable to connect your profile.");
+      return;
+    }
+    const { data: profile, error: profileError } = await sb
+      .from("profiles")
+      .select("profile_id, display_name, email")
+      .eq("profile_id", profileId)
+      .eq("auth_user_id", user.id)
+      .single();
+    if (version !== refreshVersion) return;
+    if (profileError) {
+      console.error("Profile loading error:", profileError);
+      showLoggedOut();
+      showMsg("Unable to load your profile.");
+      return;
+    }
+
+    activeUser = user;
+    window.currentGymProfile = profile;
+    $("auth-user").textContent = `Logged in as ${profile.display_name || user.email}`;
+    $("auth-btn").textContent = "Log out";
+    if (typeof window.syncPlanAuthState === "function") window.syncPlanAuthState();
+  }
+
+  $("auth-toggle").addEventListener("click", () => setMode(mode === "login" ? "create" : "login"));
+  $("auth-btn").addEventListener("click", async () => {
+    if (activeUser) {
+      const { error } = await sb.auth.signOut();
+      if (error) { alert("Could not log out: " + error.message); return; }
+      ++refreshVersion;
+      showLoggedOut();
+    } else {
+      setMode("login");
+      dialog.showModal();
+    }
   });
+  $("auth-close").addEventListener("click", () => dialog.close());
+  dialog.addEventListener("close", () => { form.reset(); msg.textContent = ""; });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const displayName = $("auth-display-name").value.trim();
     const email = $("auth-email").value.trim();
-    const submitButton = $("auth-submit");
-
-    if (!displayName || !email) {
-      showMsg("Enter a username and email address.");
+    const password = $("auth-password").value;
+    if (!email || !$("auth-email").checkValidity() || password.length < 6) {
+      showMsg("Enter a valid email and a password of at least 6 characters.");
       return;
     }
 
-    submitButton.disabled = true;
+    const button = $("auth-submit");
+    const idleLabel = button.textContent;
+    button.disabled = true;
+    $("auth-toggle").disabled = true;
+    button.textContent = mode === "create" ? "Creating account…" : "Logging in…";
+    form.setAttribute("aria-busy", "true");
     try {
-      let profile;
-
       if (mode === "create") {
-        const { data, error } = await sb
-          .from("profiles")
-          .insert({ display_name: displayName, email })
-          .select("display_name, email")
-          .single();
+        const { data, error } = await sb.auth.signUp({ email, password });
         if (error) throw error;
-        profile = data;
-      } else {
-        const { data, error } = await sb
-          .from("profiles")
-          .select("display_name, email")
-          .eq("display_name", displayName)
-          .eq("email", email)
-          .maybeSingle();
-        if (error) throw error;
-        if (!data) {
-          throw new Error("No profile matches that username and email.");
+        if (!data.session) {
+          showMsg("Check your email for a confirmation link, then log in.", false);
+        } else {
+          await loadAuthenticatedProfile();
+          if (!window.currentGymProfile) throw new Error("Account created, but the profile could not be loaded.");
+          dialog.close();
         }
-        profile = data;
+      } else {
+        const { error } = await sb.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        await loadAuthenticatedProfile();
+        if (!window.currentGymProfile) throw new Error("Signed in, but the profile could not be loaded. Check your email verification.");
+        dialog.close();
       }
-
-      setLoggedIn(profile);
-      dialog.close();
     } catch (error) {
-      showMsg(error.message || "The profile could not be saved or found.");
+      showMsg(error.message || "Authentication failed.");
     } finally {
-      submitButton.disabled = false;
+      button.disabled = false;
+      $("auth-toggle").disabled = false;
+      button.textContent = idleLabel;
+      form.removeAttribute("aria-busy");
     }
   });
 
-  if (sessionStorage.getItem("profile")) {
-    const profile = JSON.parse(sessionStorage.getItem("profile"));
-    setLoggedIn(profile);
-  }
+  // A valid Supabase session, not editable sessionStorage, controls access.
+  sb.auth.onAuthStateChange((_event, session) => {
+    if (!session) { ++refreshVersion; showLoggedOut(); }
+    // Supabase recommends not awaiting API calls inside this callback.
+  });
+  loadAuthenticatedProfile();
 })();
 
-// --- PLAN A VISIT LOGIC (Direct sessionStorage profile integration) ---
+// --- PLAN A VISIT LOGIC (Supabase authenticated profile integration) ---
 (() => {
   const getSupabaseClient = () => {
     if (typeof sb !== 'undefined') return sb;
@@ -252,24 +275,6 @@
         </div>
       `;
     }).join('');
-  }
-
-  async function resolveProfileId(displayName, email) {
-    const client = getSupabaseClient();
-    if (!client) return null;
-
-    const { data } = await client
-      .from('profiles')
-      .select('*')
-      .eq('display_name', displayName)
-      .eq('email', email)
-      .limit(1)
-      .maybeSingle();
-
-    if (data) {
-      return data.profile_id || data.id;
-    }
-    return null;
   }
 
   async function loadVisits() {
@@ -451,34 +456,23 @@
     }
   });
 
-  // Direct check against sessionStorage profile object
+  // Reservation access follows the authenticated profile loaded above.
   async function checkAuth() {
-    const rawProfile = sessionStorage.getItem("profile");
-    if (rawProfile) {
-      try {
-        const profile = JSON.parse(rawProfile);
-        if (profile && profile.display_name && profile.email) {
-          currentProfileId = await resolveProfileId(profile.display_name, profile.email);
-          if (currentProfileId) {
-            planGate.hidden = true;
-            planContent.hidden = false;
-            await loadVisits();
-            return;
-          }
-        }
-      } catch (err) {
-        console.error("Auth check error:", err);
-      }
+    const profile = window.currentGymProfile;
+    currentProfileId = profile?.profile_id || null;
+    if (currentProfileId) {
+      planGate.hidden = true;
+      planContent.hidden = false;
+      await loadVisits();
+    } else {
+      visits = [];
+      planGate.hidden = false;
+      planContent.hidden = true;
+      renderVisits();
     }
-
-    currentProfileId = null;
-    visits = [];
-    planGate.hidden = false;
-    planContent.hidden = true;
   }
 
   window.syncPlanAuthState = checkAuth;
-
   configureDateBounds();
   checkAuth();
 })();

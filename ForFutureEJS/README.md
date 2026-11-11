@@ -29,6 +29,9 @@ The server uses Supabase's Data API to read and create rows in the `profiles` ta
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_PUBLISHABLE_KEY=sb_publishable_replace_me
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+GEMINI_API_KEY=your_gemini_api_key
+GYM_MAX_CAPACITY=135
+GYM_TIME_ZONE=America/Denver
 ```
 
 Copy the project URL and publishable key from the Supabase dashboard. The admin login reads `email` and `desk_password` from `desk_staff` using the service-role key on the server. Keep that key private in `.env`; never put it in browser JavaScript or commit `.env`. The repository's `.gitignore` excludes `.env`.
