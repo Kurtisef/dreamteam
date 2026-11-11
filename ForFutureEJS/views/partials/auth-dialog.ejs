@@ -4,11 +4,11 @@
     <input type="hidden" name="mode" id="auth-mode" value="login">
     <input type="hidden" name="return_to" value="<%= currentPath %>">
 
-    <label for="auth-display-name">Username</label>
-    <input id="auth-display-name" name="display_name" type="text" autocomplete="username" required>
-
     <label for="auth-email">Email</label>
     <input id="auth-email" name="email" type="email" autocomplete="email" required>
+
+    <label for="auth-password">Password</label>
+    <input id="auth-password" name="password" type="password" autocomplete="current-password" required>
 
     <p id="auth-msg" role="status" aria-live="polite"></p>
     <button id="auth-submit" type="submit">Log in</button>
