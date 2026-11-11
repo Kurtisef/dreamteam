@@ -1,6 +1,12 @@
 const express = require('express');
+const fs = require('node:fs');
 const path = require('path');
 const crypto = require('crypto');
+
+const envPath = path.join(__dirname, '.env');
+if (typeof process.loadEnvFile === 'function' && fs.existsSync(envPath)) {
+  process.loadEnvFile(envPath);
+}
 
 const app = express();
 const port = Number(process.env.PORT) || 3000;
@@ -305,6 +311,260 @@ function reservationFitsSchedule(startMinute, endMinute, scheduleRows) {
   ));
 }
 
+async function requestOperatingHours(dayOfWeek, date) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Operating hours database access is not configured.');
+  }
+
+  const url = new URL(`${supabaseUrl}/rest/v1/operating_hours`);
+  url.searchParams.set('select', 'schedule_id,day_of_week,open_time,close_time,is_closed_all_day');
+  url.searchParams.set('day_of_week', `eq.${dayOfWeek}`);
+  url.searchParams.set('order', 'open_time.asc');
+
+  const response = await fetch(url, {
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    },
+  });
+  const responseText = await response.text();
+  let schedules;
+  try {
+    schedules = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    schedules = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(schedules?.message || schedules?.hint || `Supabase schedule request failed (${response.status}).`);
+  }
+  if (!Array.isArray(schedules)) {
+    throw new Error('Supabase returned an invalid operating-hours list.');
+  }
+
+  const exceptionsUrl = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+  exceptionsUrl.searchParams.set('select', 'schedule_id,start_time,end_time,reason,is_closed_all_day');
+  exceptionsUrl.searchParams.set('exception_date', `eq.${date}`);
+  const exceptionsResponse = await fetch(exceptionsUrl, {
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    },
+  });
+  const exceptionsText = await exceptionsResponse.text();
+  let exceptions;
+  try {
+    exceptions = exceptionsText ? JSON.parse(exceptionsText) : null;
+  } catch {
+    exceptions = null;
+  }
+
+  if (!exceptionsResponse.ok) {
+    throw new Error(exceptions?.message || exceptions?.hint || `Supabase schedule exception request failed (${exceptionsResponse.status}).`);
+  }
+  if (!Array.isArray(exceptions)) {
+    throw new Error('Supabase returned an invalid schedule exception list.');
+  }
+  if (!exceptions.length) return schedules;
+
+  const exceptionsBySchedule = new Map();
+  for (const exception of exceptions) {
+    const entries = exceptionsBySchedule.get(exception.schedule_id) || [];
+    entries.push(exception);
+    exceptionsBySchedule.set(exception.schedule_id, entries);
+  }
+
+  return schedules.flatMap((schedule) => {
+    const overrides = exceptionsBySchedule.get(schedule.schedule_id);
+    if (!overrides) return [schedule];
+    return overrides.map((exception) => ({
+      ...schedule,
+      open_time: exception.start_time,
+      close_time: exception.end_time,
+      reason: exception.reason,
+      is_closed_all_day: exception.is_closed_all_day,
+    }));
+  });
+}
+
+async function requestLatestCapacityLog() {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Capacity data access is not configured.');
+  }
+
+  const url = new URL(`${supabaseUrl}/rest/v1/capacity_logs`);
+  url.searchParams.set(
+    'select',
+    'current_headcount,capacity_percentage,outside_wait_mins,equipment_wait_mins,recorded_at'
+  );
+  url.searchParams.set('order', 'recorded_at.desc');
+  url.searchParams.set('limit', '1');
+
+  const response = await fetch(url, {
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    },
+  });
+  const responseText = await response.text();
+  let rows;
+  try {
+    rows = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    rows = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(rows?.message || rows?.hint || `Supabase capacity request failed (${response.status}).`);
+  }
+  if (!Array.isArray(rows)) {
+    throw new Error('Supabase returned an invalid capacity log list.');
+  }
+  return rows[0] || null;
+}
+
+function getZonedDateTimeParts(date) {
+  return Object.fromEntries(
+    gymDateTimeFormatter.formatToParts(date)
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, part.value])
+  );
+}
+
+function getUtcTimeForGymMidnight(date) {
+  const [year, month, day] = date.split('-').map(Number);
+  const targetUtc = Date.UTC(year, month - 1, day);
+  let timestamp = targetUtc;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const parts = getZonedDateTimeParts(new Date(timestamp));
+    const representedUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second)
+    );
+    const correction = targetUtc - representedUtc;
+    timestamp += correction;
+    if (correction === 0) break;
+  }
+
+  return new Date(timestamp);
+}
+
+function formatUtcDatabaseTimestamp(date) {
+  return date.toISOString().replace('Z', '');
+}
+
+async function requestHourlyCapacityAverages(date) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Capacity data access is not configured.');
+  }
+
+  const historicalStartDate = new Date(`${date}T00:00:00Z`);
+  historicalStartDate.setUTCFullYear(historicalStartDate.getUTCFullYear() - 1);
+  const historicalStart = getUtcTimeForGymMidnight(historicalStartDate.toISOString().slice(0, 10));
+  const nextDate = new Date(`${date}T00:00:00Z`);
+  nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+  const end = getUtcTimeForGymMidnight(nextDate.toISOString().slice(0, 10));
+  const startAt = formatUtcDatabaseTimestamp(historicalStart);
+  const endAt = formatUtcDatabaseTimestamp(end);
+  const pageSize = 1000;
+  const todaySumsByHour = Array(24).fill(0);
+  const todayCountsByHour = Array(24).fill(0);
+  const weekdaySumsByHour = Array(24).fill(0);
+  const weekdayCountsByHour = Array(24).fill(0);
+  const targetWeekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+
+  for (let offset = 0; ; offset += pageSize) {
+    const url = new URL(`${supabaseUrl}/rest/v1/capacity_logs`);
+    url.searchParams.set('select', 'recorded_at,capacity_percentage');
+    url.searchParams.set('recorded_at', `gte.${startAt}`);
+    url.searchParams.set('and', `(recorded_at.lt.${endAt})`);
+    url.searchParams.set('order', 'recorded_at.asc');
+
+    const response = await fetch(url, {
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Range-Unit': 'items',
+        Range: `${offset}-${offset + pageSize - 1}`,
+      },
+    });
+    const responseText = await response.text();
+    let rows;
+    try {
+      rows = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      rows = null;
+    }
+
+    if (!response.ok) {
+      throw new Error(rows?.message || rows?.hint || `Supabase hourly capacity request failed (${response.status}).`);
+    }
+    if (!Array.isArray(rows)) {
+      throw new Error('Supabase returned an invalid hourly capacity log list.');
+    }
+
+    for (const row of rows) {
+      if (
+        !Number.isInteger(row.capacity_percentage)
+        || row.capacity_percentage < 0
+        || row.capacity_percentage > 100
+        || typeof row.recorded_at !== 'string'
+      ) {
+        throw new Error('Supabase returned an invalid capacity log row.');
+      }
+
+      const recordedAt = /(?:Z|[+-]\d{2}:\d{2})$/i.test(row.recorded_at)
+        ? new Date(row.recorded_at)
+        : new Date(`${row.recorded_at}Z`);
+      if (Number.isNaN(recordedAt.getTime())) {
+        throw new Error('Supabase returned an invalid capacity log timestamp.');
+      }
+      const parts = getZonedDateTimeParts(recordedAt);
+      const localDate = `${parts.year}-${parts.month}-${parts.day}`;
+      const hour = Number(parts.hour);
+      if (localDate === date) {
+        todaySumsByHour[hour] += row.capacity_percentage;
+        todayCountsByHour[hour] += 1;
+      } else if (
+        localDate < date
+        && localDate >= historicalStartDate.toISOString().slice(0, 10)
+        && new Date(`${localDate}T00:00:00Z`).getUTCDay() === targetWeekday
+      ) {
+        weekdaySumsByHour[hour] += row.capacity_percentage;
+        weekdayCountsByHour[hour] += 1;
+      }
+    }
+
+    if (rows.length < pageSize) break;
+  }
+
+  const averagesFor = (sums, counts) => Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    average_capacity: counts[hour] ? sums[hour] / counts[hour] : null,
+    sample_count: counts[hour],
+  }));
+  return {
+    today: averagesFor(todaySumsByHour, todayCountsByHour),
+    weekday: averagesFor(weekdaySumsByHour, weekdayCountsByHour),
+    historical_start_date: historicalStartDate.toISOString().slice(0, 10),
+  };
+}
+
+function getMaximumCapacity() {
+  const maximumCapacity = process.env.GYM_MAX_CAPACITY === undefined
+    ? 135
+    : Number(process.env.GYM_MAX_CAPACITY);
+  if (!Number.isSafeInteger(maximumCapacity) || maximumCapacity <= 0) {
+    throw new Error('GYM_MAX_CAPACITY must be a positive whole number.');
+  }
+  return maximumCapacity;
+}
+
 async function requestDeskStaffByEmail(email) {
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     throw new Error('Admin database access is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.');
@@ -369,7 +629,7 @@ async function insertTrafficEvent({ deskId, eventType, waitTimeMin }) {
 }
 
 const GYM_TIME_ZONE = 'America/Denver';
-const MAX_GYM_CAPACITY = 135;
+const MAX_GYM_CAPACITY = getMaximumCapacity();
 
 function mountainDateParts(date) {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -879,6 +1139,69 @@ app.post('/admin/events', async (req, res) => {
   }
 });
 
+app.get('/operating-hours', async (req, res) => {
+  const dayOfWeek = Number(req.query.day_of_week);
+  const date = typeof req.query.date === 'string' ? req.query.date : '';
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+    && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) {
+    return res.status(400).json({ error: 'Day of week must be a number from 0 to 6.' });
+  }
+  if (!validDate) {
+    return res.status(400).json({ error: 'Date must be a valid YYYY-MM-DD date.' });
+  }
+  if (new Date(`${date}T00:00:00Z`).getUTCDay() !== dayOfWeek) {
+    return res.status(400).json({ error: 'Day of week does not match the requested date.' });
+  }
+
+  try {
+    res.set('Cache-Control', 'no-store');
+    return res.json(await requestOperatingHours(dayOfWeek, date));
+  } catch (error) {
+    console.error('Operating hours fetch failed:', error);
+    return res.status(503).json({ error: 'Could not load operating hours.' });
+  }
+});
+
+app.get('/capacity/latest', async (req, res) => {
+  try {
+    const latestCapacity = await requestLatestCapacityLog();
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      capacity: latestCapacity
+        ? {
+            ...latestCapacity,
+            at_max_capacity: Number.isInteger(latestCapacity.current_headcount)
+              && latestCapacity.current_headcount >= getMaximumCapacity(),
+          }
+        : null,
+    });
+  } catch (error) {
+    console.error('Latest capacity fetch failed:', error);
+    return res.status(503).json({ error: 'Could not load live gym capacity.' });
+  }
+});
+
+app.get('/capacity/hourly', async (req, res) => {
+  const date = typeof req.query.date === 'string' ? req.query.date : '';
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+    && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  if (!validDate) {
+    return res.status(400).json({ error: 'Date must be a valid YYYY-MM-DD date.' });
+  }
+
+  try {
+    const hourlyAverages = await requestHourlyCapacityAverages(date);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ date, ...hourlyAverages });
+  } catch (error) {
+    console.error('Hourly capacity fetch failed:', error);
+    return res.status(503).json({ error: 'Could not load hourly gym capacity.' });
+  }
+});
+
 app.get('/api/week-capacity', async (req, res) => {
   try {
     return res.json(await buildWeekCapacity());
@@ -906,7 +1229,6 @@ app.post('/logout', (req, res) => {
   res.redirect(safeReturnPath(req.body.return_to));
 });
 
-// The stylesheet remains at the project root, one level above this server file.
 function renderPage(view) {
   return (req, res) => res.render(view, {
     user: req.profile,
