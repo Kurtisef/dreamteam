@@ -1115,14 +1115,6 @@ app.post('/logout', (req, res) => {
 });
 
 // The stylesheet remains at the project root, one level above this server file.
-app.get('/styles.css', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'styles.css'));
-});
-
-app.get('/admin.css', (req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'admin.css'));
-});
-
 function renderPage(view) {
   return (req, res) => res.render(view, {
     user: req.profile,
@@ -1152,7 +1144,7 @@ app.use((err, req, res, next) => {
 });
 
 if (require.main === module) {
-  require('../capacityAgent');
+  require('./capacityAgent');
   app.listen(port, () => {
     console.log(`BYU Gym Planner server listening on http://localhost:${port}`);
     if (!supabaseUrl || !supabasePublishableKey) {
