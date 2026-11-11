@@ -662,6 +662,79 @@ async function insertTrafficEvent({ deskId, eventType, waitTimeMin }) {
   }
 }
 
+async function requestTodayTrafficEvents() {
+  const now = new Date();
+  const parts = mountainDateParts(now);
+  const today = dateKeyFromParts(parts);
+  const events = await readTrafficEventsSince(new Date(mountainWallTime(today, 6)));
+  const todayEvents = events.filter((event) => {
+    if (!event.created_at || !['in', 'out'].includes(event.event_type)) return false;
+    const eventParts = mountainDateParts(new Date(event.created_at));
+    return dateKeyFromParts(eventParts) === today
+      && Number(eventParts.hour) >= 6
+      && Number(eventParts.hour) < 22;
+  });
+  let insideCount = 0;
+  for (const event of todayEvents) {
+    insideCount = Math.max(
+      0,
+      Math.min(MAX_GYM_CAPACITY, insideCount + (event.event_type === 'in' ? 1 : -1))
+    );
+  }
+  return {
+    events: todayEvents.reverse(),
+    insideCount,
+  };
+}
+
+async function deleteTrafficEvents() {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Admin database access is not configured.');
+  }
+
+  const url = new URL(`${supabaseUrl}/rest/v1/traffic_events`);
+  url.searchParams.set('event_type', 'not.is.null');
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      Prefer: 'return=minimal',
+    },
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => null);
+    throw new Error(result?.message || result?.hint || `Supabase delete failed (${response.status}).`);
+  }
+}
+
+async function insertCapacityResetLog() {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Capacity data access is not configured.');
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/capacity_logs`, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({
+      recorded_at: new Date().toISOString().replace('Z', ''),
+      capacity_percentage: 0,
+      outside_wait_mins: 0,
+      equipment_wait_mins: 0,
+      current_headcount: 0,
+    }),
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => null);
+    throw new Error(result?.message || result?.hint || `Capacity reset insert failed (${response.status}).`);
+  }
+}
+
 const GYM_TIME_ZONE = 'America/Denver';
 const MAX_GYM_CAPACITY = getMaximumCapacity();
 
@@ -710,7 +783,7 @@ async function readTrafficEventsSince(since) {
   const pageSize = 1000;
   for (let offset = 0; ; offset += pageSize) {
     const url = new URL(`${supabaseUrl}/rest/v1/traffic_events`);
-    url.searchParams.set('select', 'event_type,created_at');
+    url.searchParams.set('select', 'event_type,wait_time_min,created_at');
     url.searchParams.set('created_at', `gte.${since.toISOString()}`);
     url.searchParams.set('order', 'created_at.asc');
     url.searchParams.set('limit', String(pageSize));
@@ -1226,7 +1299,34 @@ app.post('/admin/events', async (req, res) => {
     return res.status(201).json({ ok: true });
   } catch (error) {
     console.error('Traffic event insert failed:', error);
-    return res.status(500).json({ error: 'Could not save the traffic event.' });
+    return res.status(500).json({ error: `Could not save the traffic event: ${error.message}` });
+  }
+});
+
+app.get('/admin/events', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+
+  try {
+    res.set('Cache-Control', 'no-store');
+    return res.json(await requestTodayTrafficEvents());
+  } catch (error) {
+    console.error('Traffic events fetch failed:', error);
+    return res.status(503).json({ error: `Could not load gym activity: ${error.message}` });
+  }
+});
+
+app.post('/admin/close', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+
+  try {
+    await deleteTrafficEvents();
+    await insertCapacityResetLog();
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Traffic events clear failed:', error);
+    return res.status(500).json({ error: `Could not close the gym and clear activity: ${error.message}` });
   }
 });
 
