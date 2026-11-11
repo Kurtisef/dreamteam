@@ -368,15 +368,59 @@ function calculateEquipmentWaitMinutes(currentHeadcount, activePlannedVisits) {
   return Math.round(crowdWaitMinutes + plannedDemandAdjustmentMinutes);
 }
 
+function estimateMetricsFromAvailableData(data) {
+  const summary = summarizeGymData(data);
+  const baselineHeadcount = Number.isInteger(summary.capacitySnapshot?.current_headcount)
+    ? summary.capacitySnapshot.current_headcount
+    : 0;
+  const eventDelta = summary.trafficLast60Minutes.eventsAfterCapacitySnapshot.check_ins
+    - summary.trafficLast60Minutes.eventsAfterCapacitySnapshot.check_outs;
+  const currentHeadcount = Math.min(
+    GYM_MAX_CAPACITY,
+    Math.max(0, baselineHeadcount + eventDelta)
+  );
+  const outsideWaitPeriod = summarizeOutsideWaitPeriod(data);
+  const outsideWaitMins = currentHeadcount >= GYM_MAX_CAPACITY
+    && outsideWaitPeriod.isAtMaxCapacity
+    && outsideWaitPeriod.waitTimesMins.length
+    ? Math.round(
+      outsideWaitPeriod.waitTimesMins.reduce((total, value) => total + value, 0)
+      / outsideWaitPeriod.waitTimesMins.length
+    )
+    : 0;
+
+  return {
+    capacity_percentage: Math.min(
+      100,
+      Math.round((currentHeadcount / GYM_MAX_CAPACITY) * 100)
+    ),
+    outside_wait_mins: outsideWaitMins,
+    equipment_wait_mins: calculateEquipmentWaitMinutes(
+      currentHeadcount,
+      data.activePlannedVisits
+    ),
+    current_headcount: currentHeadcount,
+  };
+}
+
 async function transformGymData(data) {
-  const response = await genAI.models.generateContent({
-    model: GEMINI_MODEL,
-    contents: createPrompt(data),
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: geminiResponseSchema,
-    },
-  });
+  let response;
+  try {
+    response = await genAI.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: createPrompt(data),
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: geminiResponseSchema,
+      },
+    });
+  } catch (error) {
+    console.warn(
+      "Gemini capacity estimate failed; saving a traffic-event-based estimate instead:",
+      error
+    );
+    return estimateMetricsFromAvailableData(data);
+  }
 
   if (typeof response.text !== "string" || response.text.trim() === "") {
     throw new Error("Gemini returned an empty response.");
