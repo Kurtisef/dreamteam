@@ -581,6 +581,18 @@ async function deleteOldPlannedVisits() {
   });
 }
 
+function getRecentCompletedVisitWindow() {
+  const gymNow = getGymClockParts();
+  const beforeArrival = `${gymNow.date}T${String(gymNow.hour).padStart(2, '0')}:${String(gymNow.minute).padStart(2, '0')}:${String(gymNow.second).padStart(2, '0')}`;
+  const cutoffDate = new Date(`${gymNow.date}T00:00:00Z`);
+  cutoffDate.setUTCHours(gymNow.hour, gymNow.minute, gymNow.second, 0);
+  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 7);
+  return {
+    afterArrival: cutoffDate.toISOString().slice(0, 19),
+    beforeArrival,
+  };
+}
+
 function parsePlannedVisitInput(body) {
   const date = typeof body.date === 'string' ? body.date : '';
   const time = typeof body.time === 'string' ? body.time : '';
