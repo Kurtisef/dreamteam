@@ -1,0 +1,42 @@
+CREATE OR REPLACE FUNCTION public.expire_planned_visits_and_update_metrics(
+  p_before_arrival timestamp without time zone
+)
+RETURNS integer
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = ''
+AS $function$
+  WITH deleted AS (
+    DELETE FROM public.planned_visits
+    WHERE intended_arrival < p_before_arrival
+    RETURNING profile_id
+  ),
+  per_profile AS (
+    SELECT profile_id, count(*)::integer AS expired_count
+    FROM deleted
+    GROUP BY profile_id
+  ),
+  updated AS (
+    INSERT INTO public.profile_reservation_metrics AS metrics (
+      profile_id,
+      reservations_total,
+      updated_at
+    )
+    SELECT profile_id, expired_count, now()
+    FROM per_profile
+    ON CONFLICT (profile_id) DO UPDATE
+      SET reservations_total = metrics.reservations_total + EXCLUDED.reservations_total,
+          updated_at = now()
+    RETURNING profile_id
+  )
+  SELECT COALESCE(SUM(per_profile.expired_count), 0)::integer
+  FROM per_profile
+  CROSS JOIN (SELECT count(*) FROM updated) AS applied;
+$function$;
+
+REVOKE ALL ON FUNCTION public.expire_planned_visits_and_update_metrics(timestamp without time zone)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.expire_planned_visits_and_update_metrics(timestamp without time zone)
+  TO service_role;
+
+NOTIFY pgrst, 'reload schema';
