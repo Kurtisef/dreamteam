@@ -167,6 +167,41 @@ async function requestPlannedVisits({ profileId, method = 'GET', date, visitId, 
   return result;
 }
 
+async function requestExpiredPlannedVisitCleanup(beforeArrival) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Planned visit database access is not configured.');
+  }
+
+  const response = await fetch(
+    `${supabaseUrl}/rest/v1/rpc/expire_planned_visits_and_update_metrics`,
+    {
+      method: 'POST',
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ p_before_arrival: beforeArrival }),
+    }
+  );
+  const responseText = await response.text();
+  let result;
+  try {
+    result = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    result = null;
+  }
+
+  if (!response.ok) {
+    const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
+    throw new Error(message);
+  }
+  if (!Number.isInteger(result) || result < 0) {
+    throw new Error('Supabase returned an invalid expired reservation count.');
+  }
+  return result;
+}
+
 async function requestAtomicPlannedVisit(body) {
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     throw new Error('Planned visit database access is not configured.');
@@ -230,10 +265,7 @@ async function deleteOldPlannedVisits() {
     .join(':');
   const cutoff = `${cutoffDay}T${cutoffTime}`;
 
-  return requestPlannedVisits({
-    method: 'DELETE',
-    beforeArrival: cutoff,
-  });
+  return requestExpiredPlannedVisitCleanup(cutoff);
 }
 
 function parsePlannedVisitInput(body) {
