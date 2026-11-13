@@ -94,6 +94,7 @@
 </div>
 <%- include('partials/auth-dialog') %>
 <script src="/auth.js" defer></script>
+<% if (user && user.role === 'user') { %><script src="/app-open.js" defer></script><% } %>
 <script>
   const heat = document.querySelector('.heat');
   const dayPicker = document.querySelector('#mobile-day');
