@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>OKRs | BYU Gym Planner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Public+Sans:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+  <div class="app">
+    <header class="top"><div class="in">
+      <h1>BYU Gym Planner</h1>
+      <p>Admin OKRs and key results.</p>
+      <nav class="tabs" aria-label="Screens">
+        <a href="/home">Home</a>
+        <a href="/admin">Front Desk</a>
+        <a href="/admin/okrs" aria-current="page">OKRs</a>
+      </nav>
+    </div></header>
+
+    <main class="admin okr-page">
+      <p id="okr-status" class="okr-status" role="status" aria-live="polite">Loading OKR metrics…</p>
+
+      <section class="card okr-objective" aria-labelledby="okr-one-title">
+        <h2 id="okr-one-title">Objective 1: Users use the app to check gym capacity</h2>
+        <div class="okr-results okr-one-results">
+          <article class="okr-result">
+            <h3>Key Result 1: Average 3 Visits per User</h3>
+            <p class="okr-metric"><strong id="okr-reservations-value">—</strong><span>visits per user</span></p>
+            <div class="okr-profile-table-wrap">
+              <table class="okr-profile-table">
+                <thead><tr><th>User</th><th>Planned visits</th></tr></thead>
+                <tbody id="okr-reservations-by-profile"></tbody>
+              </table>
+            </div>
+            <nav id="okr-reservations-pagination" class="okr-pagination" aria-label="Planned visit profiles"></nav>
+          </article>
+          <article class="okr-result">
+            <h3>Key Result 2: 5 app opens per account per week</h3>
+            <p class="okr-metric"><strong id="okr-opens-value">—</strong><span>average opens per profile per week</span></p>
+            <ol id="okr-opens-trend" class="okr-trend" aria-label="Weekly average app opens per profile"></ol>
+            <nav id="okr-opens-pagination" class="okr-pagination" aria-label="App opens by week"></nav>
+          </article>
+        </div>
+      </section>
+
+      <section class="card okr-objective" aria-labelledby="okr-two-title">
+        <h2 id="okr-two-title">Objective 2: Make the gym less crowded</h2>
+        <div class="okr-results okr-two-results">
+          <article class="okr-result">
+            <h3>Key Result 1: Reduce average wait time</h3>
+            <div class="hour-picker-control okr-wait-picker-control">
+              <button id="okr-wait-picker-trigger" class="hour-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="okr-wait-picker-options">
+                <span id="okr-wait-picker-value">Outside wait</span>
+                <span class="hour-picker-chevron" aria-hidden="true"></span>
+              </button>
+              <div id="okr-wait-picker-options" class="hour-picker-options" role="listbox" aria-label="Choose a wait-time trend" hidden></div>
+            </div>
+            <ol id="okr-wait-trend" class="okr-trend" aria-label="Weekly average outside wait"></ol>
+          </article>
+          <article class="okr-result">
+            <h3>Key Result 2: Reduce hourly capacity variation</h3>
+            <div class="okr-wait-picker-spacer" aria-hidden="true"></div>
+            <ol id="okr-capacity-trend" class="okr-trend" aria-label="Weekly hourly capacity standard deviation"></ol>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/okrs.js" defer></script>
+</body>
+</html>

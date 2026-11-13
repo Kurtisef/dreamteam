@@ -28,7 +28,10 @@ const gymDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
 
 const SESSION_COOKIE = 'gym_profile_session';
 const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+const APP_OPEN_INTERVAL_MS = 30 * 60 * 1000;
 const profileSessions = new Map();
+const appOpenLastRecordedAt = new Map();
+const pendingAppOpenInserts = new Map();
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
@@ -165,6 +168,267 @@ async function requestPlannedVisits({ profileId, method = 'GET', date, visitId, 
     throw new Error(message);
   }
   return result;
+}
+
+async function requestAdminOkrRows(table, select, filters = {}) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('OKR data access is not configured.');
+  }
+  if (!['profiles', 'app_opens', 'planned_visits', 'capacity_logs'].includes(table)) {
+    throw new Error('The requested OKR data source is not allowed.');
+  }
+
+  const rows = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const url = new URL(`${supabaseUrl}/rest/v1/${table}`);
+    url.searchParams.set('select', select);
+    for (const [key, value] of Object.entries(filters)) {
+      url.searchParams.set(key, value);
+    }
+
+    const response = await fetch(url, {
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Range-Unit': 'items',
+        Range: `${offset}-${offset + pageSize - 1}`,
+      },
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(
+        result?.message || result?.hint || `Supabase ${table} request failed (${response.status}).`
+      );
+      error.code = result?.code;
+      error.table = table;
+      throw error;
+    }
+    if (!Array.isArray(result)) {
+      throw new Error(`Supabase returned an invalid ${table} list.`);
+    }
+    rows.push(...result);
+    if (result.length < pageSize) return rows;
+  }
+}
+
+function getOkrWeekKeys(currentWeek) {
+  return Array.from({ length: 8 }, (_, index) => shiftDateKey(currentWeek, (index - 7) * 7));
+}
+
+function groupByWeek(rows, getDateKey) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const dateKey = getDateKey(row);
+    if (!dateKey) continue;
+    const week = weekStartKey(dateKey);
+    if (!grouped.has(week)) grouped.set(week, []);
+    grouped.get(week).push(row);
+  }
+  return grouped;
+}
+
+async function requestAdminOkrMetrics() {
+  const now = new Date();
+  const currentWeek = weekStartKey(dateKeyFromParts(mountainDateParts(now)));
+  const firstWeek = shiftDateKey(currentWeek, -49);
+  const startAt = new Date(mountainWallTime(firstWeek, 0)).toISOString();
+  const endAt = now.toISOString();
+  const [profiles, appOpens, plannedVisits, capacityLogs] = await Promise.all([
+    requestAdminOkrRows('profiles', 'profile_id,display_name'),
+    requestAdminOkrRows('app_opens', 'profile_id,opened_at', {
+      opened_at: `gte.${startAt}`,
+      and: `(opened_at.lt.${endAt})`,
+      order: 'opened_at.asc',
+    }),
+    requestAdminOkrRows('planned_visits', 'profile_id'),
+    requestAdminOkrRows(
+      'capacity_logs',
+      'recorded_at,capacity_percentage,outside_wait_mins,equipment_wait_mins',
+      {
+      recorded_at: `gte.${startAt}`,
+      and: `(recorded_at.lt.${endAt})`,
+      order: 'recorded_at.asc',
+      }
+    ),
+  ]);
+  const weekKeys = getOkrWeekKeys(currentWeek);
+  const profileIds = new Set(profiles.map((profile) => profile.profile_id).filter(Boolean).map(String));
+  const reservationsByProfile = new Map(
+    profiles.filter((profile) => profile.profile_id).map((profile) => [String(profile.profile_id), {
+      profile_id: profile.profile_id,
+      display_name: profile.display_name || '',
+      total_planned_visits: 0,
+    }])
+  );
+  for (const visit of plannedVisits) {
+    if (visit.profile_id === null || visit.profile_id === undefined) continue;
+    const profileId = String(visit.profile_id);
+    if (!reservationsByProfile.has(profileId)) {
+      reservationsByProfile.set(profileId, {
+        profile_id: profileId,
+        display_name: '',
+        total_planned_visits: 0,
+      });
+    }
+    reservationsByProfile.get(profileId).total_planned_visits += 1;
+  }
+  const plannedVisitsByProfile = Array.from(reservationsByProfile.values())
+    .sort((a, b) => b.total_planned_visits - a.total_planned_visits
+      || a.display_name.localeCompare(b.display_name)
+      || a.profile_id.localeCompare(b.profile_id));
+  const appOpensByWeek = groupByWeek(appOpens, (open) => {
+    if (typeof open.opened_at !== 'string') return null;
+    return dateKeyFromParts(mountainDateParts(new Date(open.opened_at)));
+  });
+  const weeklyAppOpens = weekKeys.map((week) => {
+    const openCount = (appOpensByWeek.get(week) || []).length;
+    return {
+      week_start: week,
+      open_count: openCount,
+      average_opens_per_profile: profileIds.size
+        ? Math.round((openCount / profileIds.size) * 100) / 100
+        : null,
+    };
+  });
+  const waitTimesByWeek = new Map();
+  const hourlyCapacityByDay = new Map();
+  for (const record of capacityLogs) {
+    if (typeof record.recorded_at !== 'string') continue;
+    const parts = mountainDateParts(new Date(record.recorded_at));
+    const dateKey = dateKeyFromParts(parts);
+    const week = weekStartKey(dateKey);
+    if (!waitTimesByWeek.has(week)) {
+      waitTimesByWeek.set(week, { outside: [], equipment: [] });
+    }
+    const weeklyWaits = waitTimesByWeek.get(week);
+    for (const [field, values] of [
+      ['outside_wait_mins', weeklyWaits.outside],
+      ['equipment_wait_mins', weeklyWaits.equipment],
+    ]) {
+      const minutes = record[field];
+      if (Number.isFinite(minutes) && minutes >= 0) values.push(minutes);
+    }
+
+    const fullness = Number(record.capacity_percentage);
+    if (
+      record.capacity_percentage === null
+      || !Number.isFinite(fullness)
+      || fullness < 0
+      || fullness > 100
+    ) continue;
+    const hour = Number(parts.hour);
+    if (parts.weekday === 'Sun' || hour < 6 || hour > 21) continue;
+    if (!hourlyCapacityByDay.has(dateKey)) hourlyCapacityByDay.set(dateKey, new Map());
+    const hourlyAverages = hourlyCapacityByDay.get(dateKey);
+    if (!hourlyAverages.has(hour)) hourlyAverages.set(hour, []);
+    hourlyAverages.get(hour).push(fullness);
+  }
+
+  const capacityValuesByWeek = new Map();
+  for (const [dateKey, hours] of hourlyCapacityByDay) {
+    const week = weekStartKey(dateKey);
+    if (!capacityValuesByWeek.has(week)) capacityValuesByWeek.set(week, []);
+    for (const readings of hours.values()) {
+      capacityValuesByWeek.get(week).push(
+        readings.reduce((sum, value) => sum + value, 0) / readings.length
+      );
+    }
+  }
+
+  const averageWait = (records) => records.length
+    ? Math.round(records.reduce((sum, value) => sum + value, 0) / records.length * 100) / 100
+    : null;
+  const weeklyWaitTimes = weekKeys.map((week) => {
+    const records = waitTimesByWeek.get(week) || { outside: [], equipment: [] };
+    return {
+      week_start: week,
+      average_outside_wait_minutes: averageWait(records.outside),
+      outside_sample_count: records.outside.length,
+      average_equipment_wait_minutes: averageWait(records.equipment),
+      equipment_sample_count: records.equipment.length,
+    };
+  });
+  const weeklyCapacityVariation = weekKeys.map((week) => {
+    const values = capacityValuesByWeek.get(week) || [];
+    const mean = values.length
+      ? values.reduce((sum, value) => sum + value, 0) / values.length
+      : 0;
+    const variance = values.length
+      ? values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / values.length
+      : 0;
+    return {
+      week_start: week,
+      capacity_percentage_stddev: values.length
+        ? Math.round(Math.sqrt(variance) * 100) / 100
+        : null,
+      sampled_hours: values.length,
+    };
+  });
+
+  const profileCount = profiles.filter((profile) => profile.profile_id).length;
+  const appOpenCount = appOpens.length;
+  return {
+    profiles_count: profileCount,
+    app_opens_count: appOpenCount,
+    app_opens_per_profile: profileCount
+      ? Math.round((appOpenCount / profileCount / weekKeys.length) * 100) / 100
+      : null,
+    planned_visits_count: plannedVisits.length,
+    planned_visits_by_profile: plannedVisitsByProfile,
+    app_opens_weekly: weeklyAppOpens,
+    wait_times_weekly: weeklyWaitTimes,
+    capacity_variation_weekly: weeklyCapacityVariation,
+  };
+}
+
+async function insertAppOpen(profileId) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('App-open tracking is not configured.');
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/app_opens`, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({
+      profile_id: profileId,
+      opened_at: new Date().toISOString(),
+    }),
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => null);
+    throw new Error(result?.message || result?.hint || `Supabase app-open insert failed (${response.status}).`);
+  }
+}
+
+async function insertAppOpenIfDue(profileId) {
+  const profileKey = String(profileId);
+  const lastRecordedAt = appOpenLastRecordedAt.get(profileKey);
+  if (lastRecordedAt && Date.now() - lastRecordedAt < APP_OPEN_INTERVAL_MS) return false;
+
+  const pendingInsert = pendingAppOpenInserts.get(profileKey);
+  if (pendingInsert) {
+    await pendingInsert;
+    return false;
+  }
+
+  const insert = insertAppOpen(profileId).then(() => {
+    appOpenLastRecordedAt.set(profileKey, Date.now());
+    return true;
+  });
+  pendingAppOpenInserts.set(profileKey, insert);
+  try {
+    return await insert;
+  } finally {
+    if (pendingAppOpenInserts.get(profileKey) === insert) {
+      pendingAppOpenInserts.delete(profileKey);
+    }
+  }
 }
 
 async function requestAtomicPlannedVisit(body) {
@@ -1218,6 +1482,14 @@ app.post('/login', async (req, res) => {
       email: profile.email,
       role: 'user',
     };
+    if (user.profile_id) {
+      try {
+        await insertAppOpen(user.profile_id);
+        appOpenLastRecordedAt.set(String(user.profile_id), Date.now());
+      } catch (error) {
+        console.error('App open insert after login failed:', error);
+      }
+    }
     profileSessions.set(sessionId, { profile: user, expiresAt: Date.now() + SESSION_LIFETIME_MS });
     setSessionCookie(res, sessionId);
     return res.redirect(returnPath);
@@ -1303,6 +1575,23 @@ app.post('/admin/events', async (req, res) => {
   }
 });
 
+app.post('/app/open', async (req, res) => {
+  if (!req.profile || req.profile.role !== 'user') {
+    return res.status(401).json({ error: 'Log in to record an app open.' });
+  }
+  if (!req.profile.profile_id) {
+    return res.status(403).json({ error: 'Your profile is missing its database ID. Please log in again.' });
+  }
+
+  try {
+    const recorded = await insertAppOpenIfDue(req.profile.profile_id);
+    return res.status(recorded ? 201 : 200).json({ ok: true, recorded });
+  } catch (error) {
+    console.error('App open insert failed:', error);
+    return res.status(500).json({ error: 'Could not record this app open.' });
+  }
+});
+
 app.get('/admin/events', async (req, res) => {
   if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
   if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
@@ -1313,6 +1602,24 @@ app.get('/admin/events', async (req, res) => {
   } catch (error) {
     console.error('Traffic events fetch failed:', error);
     return res.status(503).json({ error: `Could not load gym activity: ${error.message}` });
+  }
+});
+
+app.get('/admin/okr-data', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+
+  try {
+    res.set('Cache-Control', 'no-store');
+    return res.json(await requestAdminOkrMetrics());
+  } catch (error) {
+    console.error('Admin OKR metrics fetch failed:', error);
+    if (error.code === 'PGRST205' || error.code === '42P01') {
+      return res.status(503).json({
+        error: `The Supabase ${error.table || 'OKR data'} table is unavailable. Check its name and service-role access.`,
+      });
+    }
+    return res.status(503).json({ error: `Could not load OKR metrics: ${error.message}` });
   }
 });
 
@@ -1437,6 +1744,11 @@ app.get('/admin', (req, res) => {
   if (!req.profile) return res.redirect('/home?adminLogin=required');
   if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
   return res.render('admin', { user: req.profile, currentPath: req.path });
+});
+app.get('/admin/okrs', (req, res) => {
+  if (!req.profile) return res.redirect('/home?adminLogin=required');
+  if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
+  return res.render('okrs', { user: req.profile, currentPath: req.path });
 });
 
 app.use((req, res) => {
