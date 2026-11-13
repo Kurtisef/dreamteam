@@ -183,6 +183,41 @@ async function requestPlannedVisits({
   return result;
 }
 
+async function requestExpiredPlannedVisitCleanup(beforeArrival) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Planned visit database access is not configured.');
+  }
+
+  const response = await fetch(
+    `${supabaseUrl}/rest/v1/rpc/expire_planned_visits_and_update_metrics`,
+    {
+      method: 'POST',
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ p_before_arrival: beforeArrival }),
+    }
+  );
+  const responseText = await response.text();
+  let result;
+  try {
+    result = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    result = null;
+  }
+
+  if (!response.ok) {
+    const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
+    throw new Error(message);
+  }
+  if (!Number.isInteger(result) || result < 0) {
+    throw new Error('Supabase returned an invalid expired reservation count.');
+  }
+  return result;
+}
+
 async function requestAdminOkrRows(table, select, filters = {}) {
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     throw new Error('OKR data access is not configured.');
@@ -540,19 +575,10 @@ async function deleteOldPlannedVisits() {
     .join(':');
   const cutoff = `${cutoffDay}T${cutoffTime}`;
 
-  return requestExpiredPlannedVisitCleanup(cutoff);
-}
-
-function getRecentCompletedVisitWindow() {
-  const gymNow = getGymClockParts();
-  const beforeArrival = `${gymNow.date}T${String(gymNow.hour).padStart(2, '0')}:${String(gymNow.minute).padStart(2, '0')}:${String(gymNow.second).padStart(2, '0')}`;
-  const cutoffDate = new Date(`${gymNow.date}T00:00:00Z`);
-  cutoffDate.setUTCHours(gymNow.hour, gymNow.minute, gymNow.second, 0);
-  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 7);
-  return {
-    afterArrival: cutoffDate.toISOString().slice(0, 19),
-    beforeArrival,
-  };
+  return requestPlannedVisits({
+    method: 'DELETE',
+    beforeArrival: cutoff,
+  });
 }
 
 function parsePlannedVisitInput(body) {
