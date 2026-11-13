@@ -47,6 +47,7 @@
   </div>
   <% } else { %>
   <div id="plan-content" class="plan-grid">
+    <div class="plan-left-column">
       <form id="plan-form" class="card plan-form" novalidate>
         <h3>New reservation</h3>
 
@@ -103,6 +104,24 @@
         <p id="plan-msg" role="status" aria-live="polite"></p>
         <button type="submit" id="plan-submit" class="btn-primary">Reserve time</button>
       </form>
+
+      <div class="card visit-history-card">
+        <section class="visit-history" aria-labelledby="visit-history-title">
+          <div class="visit-history-header">
+            <h3 id="visit-history-title">Visits from the last 7 days</h3>
+            <label class="hide-responded-label" for="hide-responded-visits">
+              <input type="checkbox" id="hide-responded-visits">
+              <span>Hide visits already answered</span>
+            </label>
+          </div>
+          <p class="mute attendance-note">Your response is saved with the reservation. You can change it later.</p>
+          <p id="attendance-message" class="mute attendance-message" role="status" aria-live="polite"></p>
+          <div id="visit-history-list" class="plan-list" aria-live="polite">
+            <p class="mute">No visits from the last 7 days.</p>
+          </div>
+        </section>
+      </div>
+    </div>
 
       <div class="card plan-list-card">
         <div class="plan-list-header">

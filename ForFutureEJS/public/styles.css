@@ -2408,3 +2408,90 @@ main {
 
 /* Password field matches the existing email field styling. */
 .auth-dialog input[type="password"] { letter-spacing: .02em; }
+
+.plan-left-column {
+  display: grid;
+  gap: 20px;
+  align-content: start;
+}
+
+.visit-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.visit-history-header h3 {
+  margin: 0;
+}
+
+.attendance-note {
+  margin: -4px 0 12px;
+  font-size: .82rem;
+}
+
+.hide-responded-label,
+.attendance-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--mute);
+  font-size: .85rem;
+  cursor: pointer;
+}
+
+.hide-responded-label input {
+  accent-color: var(--go);
+}
+
+.attendance-choice {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  user-select: none;
+}
+
+.attendance-choice:has(input:checked) {
+  border-color: var(--go);
+  background: color-mix(in srgb, var(--go) 10%, var(--card));
+  color: var(--ink);
+}
+
+.attendance-choice input[type="radio"] {
+  display: block;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 0;
+  accent-color: var(--go);
+  cursor: pointer;
+}
+
+.attendance-choice:focus-within {
+  outline: 2px solid var(--go);
+  outline-offset: 2px;
+}
+
+.attendance-item {
+  align-items: center;
+}
+
+.attendance-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+@media (max-width: 520px) {
+  .attendance-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
