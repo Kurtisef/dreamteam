@@ -364,6 +364,7 @@
           ? (slot.fullness === null ? "N/A" : formatPercentage(slot.fullness) + "%")
           : "Closed";
         var column = document.createElement("i");
+        if (slot.open && slot.forecast && slot.fullness !== null) column.classList.add("p");
         var label = document.createElement("b");
         label.textContent = mobileChart.matches ? hourLabel(slot.hour) : compactHourLabel(slot.hour);
         label.title = hourLabel(slot.hour);
@@ -389,8 +390,7 @@
     }
 
     function formatPercentage(value) {
-      var rounded = Math.round(value * 10) / 10;
-      return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+      return String(Math.round(value));
     }
 
     function selectHour(hour) {
