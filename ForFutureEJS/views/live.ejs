@@ -15,9 +15,6 @@
 <input class="sr" type="radio" name="t" id="t-live" checked aria-label="Live feed">
 <input class="sr" type="radio" name="t" id="t-week" aria-label="Week view">
 <input class="sr" type="radio" name="t" id="t-plan" aria-label="Plan your visit">
-<input class="sr" type="radio" name="s" id="s-live" checked aria-label="Preview live data">
-<input class="sr" type="radio" name="s" id="s-closed" aria-label="Preview closed">
-<input class="sr" type="radio" name="s" id="s-off" aria-label="Preview sensors offline">
 
 <div class="app">
 <header class="top"><div class="in">
@@ -33,10 +30,9 @@
 </div></header>
 
 <main>
-  <div class="demo"><span>Preview a state:</span><label for="s-live">Live data</label><label for="s-closed">Closed</label><label for="s-off">Sensors offline</label></div>
   <% const currentUser = typeof user !== 'undefined' ? user : null; %>
 <section class="screen live" aria-label="Live feed">
-  <div class="cams-h"><h2>Live feed</h2><p>See the gym right now: open equipment, line length, and the front door.</p></div>
+  <div class="cams-h"><h2>Live feed</h2><p>Inside the gym.</p></div>
   <% if (!currentUser) { %>
   <div class="card plan-gate" role="status">
     <h3>Sign in to view the live camera feed</h3>
@@ -44,30 +40,28 @@
     <button type="button" class="btn-primary auth-trigger">Log in</button>
   </div>
   <% } else { %>
-  <div class="cams">
+  <div class="cams single-feed">
       <figure class="cam">
         <div class="feed">
-          <div class="feed-on"><div class="scene">Camera stream goes here</div><span class="badge">Live</span></div>
-          <div class="feed-off" role="status"><div class="spin"></div><b>Offline</b><span>Reconnecting to this camera.</span></div>
+          <iframe
+            id="gym-twitch-player"
+            class="twitch-player"
+            title="GymTracker live stream"
+            src="about:blank"
+            allow="autoplay; picture-in-picture"
+            referrerpolicy="no-referrer-when-downgrade"
+          ></iframe>
         </div>
-        <figcaption><b>Weight floor</b><span>Inside angle 1: racks, benches, free weights</span></figcaption>
-      </figure>
-      <figure class="cam">
-        <div class="feed">
-          <div class="feed-on"><div class="scene">Camera stream goes here</div><span class="badge">Live</span></div>
-          <div class="feed-off" role="status"><div class="spin"></div><b>Offline</b><span>Reconnecting to this camera.</span></div>
-        </div>
-        <figcaption><b>Cardio deck</b><span>Inside angle 2: cardio and functional training</span></figcaption>
-      </figure>
-      <figure class="cam">
-        <div class="feed">
-          <div class="feed-on"><div class="scene">Camera stream goes here</div><span class="badge">Live</span></div>
-          <div class="feed-off" role="status"><div class="spin"></div><b>Offline</b><span>Reconnecting to this camera.</span></div>
-        </div>
-        <figcaption><b>Hallway and entrance</b><span>How long the line is outside</span></figcaption>
       </figure>
     </div>
-    <p class="note">On a slow connection, a feed that can't load shows Offline and the rest of the page keeps working.</p>
+    <script>
+      const twitchPlayer = document.getElementById('gym-twitch-player');
+      const twitchUrl = new URL('https://player.twitch.tv/');
+      twitchUrl.searchParams.set('channel', 'GymTracker');
+      twitchUrl.searchParams.set('parent', window.location.hostname);
+      twitchUrl.searchParams.set('muted', 'true');
+      twitchPlayer.src = twitchUrl.toString();
+    </script>
   <% } %>
 </section>
 </main>
