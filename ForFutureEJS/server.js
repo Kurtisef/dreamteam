@@ -926,28 +926,16 @@ async function insertTrafficEvent({ deskId, eventType, waitTimeMin }) {
   }
 }
 
-async function requestTodayTrafficEvents() {
-  const now = new Date();
-  const parts = mountainDateParts(now);
-  const today = dateKeyFromParts(parts);
-  const events = await readTrafficEventsSince(new Date(mountainWallTime(today, 6)));
-  const todayEvents = events.filter((event) => {
-    if (!event.created_at || !['in', 'out'].includes(event.event_type)) return false;
-    const eventParts = mountainDateParts(new Date(event.created_at));
-    return dateKeyFromParts(eventParts) === today
-      && Number(eventParts.hour) >= 6
-      && Number(eventParts.hour) < 22;
-  });
+async function requestTrafficEvents() {
+  const events = await readTrafficEventsSince();
   let insideCount = 0;
-  for (const event of todayEvents) {
-    insideCount = Math.max(
-      0,
-      Math.min(MAX_GYM_CAPACITY, insideCount + (event.event_type === 'in' ? 1 : -1))
-    );
+  for (const event of events) {
+    if (event.event_type === 'in') insideCount += 1;
+    if (event.event_type === 'out') insideCount -= 1;
   }
   return {
-    events: todayEvents.reverse(),
-    insideCount,
+    events: events.reverse(),
+    insideCount: Math.max(0, Math.min(MAX_GYM_CAPACITY, insideCount)),
   };
 }
 
@@ -1038,7 +1026,7 @@ function mountainWallTime(dateKey, hour) {
   return timestamp;
 }
 
-async function readTrafficEventsSince(since) {
+async function readTrafficEventsSince(since = null) {
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     throw new Error('Capacity history is not configured.');
   }
@@ -1048,7 +1036,7 @@ async function readTrafficEventsSince(since) {
   for (let offset = 0; ; offset += pageSize) {
     const url = new URL(`${supabaseUrl}/rest/v1/traffic_events`);
     url.searchParams.set('select', 'event_type,wait_time_min,created_at');
-    url.searchParams.set('created_at', `gte.${since.toISOString()}`);
+    if (since) url.searchParams.set('created_at', `gte.${since.toISOString()}`);
     url.searchParams.set('order', 'created_at.asc');
     url.searchParams.set('limit', String(pageSize));
     const response = await fetch(url, {
@@ -1093,21 +1081,18 @@ async function readCapacityReadingsSince(since) {
   return rows;
 }
 
-async function getCurrentOccupancy(dateKey = dateKeyFromParts(mountainDateParts(new Date()))) {
-  const opening = mountainWallTime(dateKey, 6);
-  const events = await readTrafficEventsSince(new Date(opening));
+async function getCurrentOccupancy() {
+  const events = await readTrafficEventsSince();
   let count = 0;
   for (const event of events) {
-    if (!event.created_at || !['in', 'out'].includes(event.event_type)) continue;
-    const parts = mountainDateParts(new Date(event.created_at));
-    if (dateKeyFromParts(parts) !== dateKey || Number(parts.hour) < 6 || Number(parts.hour) >= 22) continue;
-    count = Math.max(0, Math.min(MAX_GYM_CAPACITY, count + (event.event_type === 'in' ? 1 : -1)));
+    if (event.event_type === 'in') count += 1;
+    if (event.event_type === 'out') count -= 1;
   }
-  return count;
+  return Math.max(0, Math.min(MAX_GYM_CAPACITY, count));
 }
 
 async function insertCapacitySnapshot(sampledAt) {
-  const occupancy = await getCurrentOccupancy(dateKeyFromParts(mountainDateParts(sampledAt)));
+  const occupancy = await getCurrentOccupancy();
   const latestUrl = new URL(`${supabaseUrl}/rest/v1/capacity_logs`);
   latestUrl.searchParams.set('select', 'outside_wait_mins,equipment_wait_mins');
   latestUrl.searchParams.set('order', 'recorded_at.desc');
@@ -1598,7 +1583,7 @@ app.get('/admin/events', async (req, res) => {
 
   try {
     res.set('Cache-Control', 'no-store');
-    return res.json(await requestTodayTrafficEvents());
+    return res.json(await requestTrafficEvents());
   } catch (error) {
     console.error('Traffic events fetch failed:', error);
     return res.status(503).json({ error: `Could not load gym activity: ${error.message}` });
