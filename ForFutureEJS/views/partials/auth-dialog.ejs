@@ -12,8 +12,7 @@
 
     <p id="auth-msg" role="status" aria-live="polite"></p>
     <button id="auth-submit" type="submit">Log in</button>
-    <button id="admin-login-open" type="button" class="link">Admin login</button>
-    <button id="auth-toggle" type="button" class="link">New here? Create a profile</button>
+    <button id="auth-toggle" type="button" class="link auth-create-profile">New here? Create a profile</button>
     <button id="auth-close" type="button" class="link">Cancel</button>
   </form>
 </dialog>
@@ -29,7 +28,12 @@
 
     <p id="admin-auth-msg" role="status" aria-live="polite"></p>
     <button type="submit">Log in as admin</button>
-    <button id="admin-auth-back" type="button" class="link">Back to regular login</button>
     <button id="admin-auth-close" type="button" class="link">Cancel</button>
   </form>
 </dialog>
+
+<% if ((currentPath === '/' || currentPath === '/home') && (!user || user.role !== 'admin')) { %>
+<footer class="auth-admin-footer">
+  <button id="admin-login-open" type="button">Admin login</button>
+</footer>
+<% } %>

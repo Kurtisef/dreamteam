@@ -1815,7 +1815,6 @@ main {
 }
 
 
-
 .auth-btn:focus-visible,
 
 .auth-dialog button:focus-visible,
@@ -1954,6 +1953,47 @@ main {
 
 }
 
+.auth-dialog .auth-create-profile {
+
+  margin: 12px auto 0;
+
+}
+
+.auth-admin-footer {
+
+  padding: 18px 16px 24px;
+
+  text-align: right;
+
+}
+
+.auth-admin-footer button {
+
+  padding: 2px 4px;
+
+  border: 0;
+
+  background: none;
+
+  color: var(--mute);
+
+  font: inherit;
+
+  font-size: .85rem;
+
+  text-decoration: underline;
+
+  cursor: pointer;
+
+}
+
+.auth-admin-footer button:focus-visible {
+
+  outline: 3px solid #7FB2FF;
+
+  outline-offset: 2px;
+
+}
 
 
 #auth-msg { margin-top: 12px; min-height: 1.5em; font-size: .9rem; }
@@ -2421,6 +2461,68 @@ main {
   .plan-grid {
 
     grid-template-columns: 1fr;
+
+  }
+
+}
+
+@media (max-width: 720px) {
+
+  .top .in {
+
+    display: grid;
+
+    grid-template-columns: minmax(0, 1fr) auto;
+
+    gap: 6px 10px;
+
+  }
+
+  .top h1,
+
+  .top p,
+
+  .tabs {
+
+    grid-column: 1 / -1;
+
+  }
+
+  .top h1 {
+
+    padding-right: 0;
+
+  }
+
+  .auth-user {
+
+    position: static;
+
+    min-width: 0;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+    white-space: nowrap;
+
+    align-self: center;
+
+    font-size: .75rem;
+
+  }
+
+  .auth-btn {
+
+    position: static;
+
+    justify-self: end;
+
+  }
+
+  .tabs {
+
+    margin-top: 6px;
 
   }
 
