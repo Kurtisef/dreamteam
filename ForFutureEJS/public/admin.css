@@ -138,6 +138,31 @@
   background: var(--bg);
   font-size: .92rem;
 }
+.schedule-admin { margin-top: 20px; }
+.schedule-page > h2 { margin-bottom: 4px; }
+.schedule-page .exception-create-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-top: 14px; }
+.schedule-page .exception-create-form .btn-primary { min-height: 42px; }
+.schedule-page .schedule-admin + .schedule-admin { margin-top: 20px; }
+.schedule-admin > .mute { margin: 4px 0 12px; }
+.exception-admin-item { padding: 12px 0; border-top: 1px solid var(--line); }
+.exception-admin-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.exception-admin-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin: 0; }
+.exception-admin-summary strong { min-width: 210px; }
+.exception-admin-reason { color: var(--mute); }
+.exception-admin-edit { padding: 14px 0 2px; }
+.exception-admin-edit[hidden] { display: none; }
+.exception-admin-fields { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.exception-field { display: grid; gap: 5px; min-width: 140px; font-size: .9rem; font-weight: 600; }
+.exception-field input { padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font: inherit; }
+.exception-field[hidden] { display: none; }
+.exception-closed-toggle { display: flex; gap: 8px; align-items: center; padding: 9px 0; font-weight: 600; }
+.exception-admin-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+.exception-admin-edit .exception-admin-actions { margin-top: 12px; }
+@media (max-width: 620px) {
+  .exception-admin-row { align-items: flex-start; flex-direction: column; }
+  .exception-admin-summary { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .exception-admin-summary strong { min-width: 0; }
+}
 .log-list li.in { border-left-color: var(--go); }
 .log-list li.out { border-left-color: var(--hot); }
 .log-list li.empty { border-left-width: 1px; }

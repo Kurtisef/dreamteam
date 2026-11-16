@@ -49,7 +49,7 @@
         row.appendChild(date);
         var details = document.createElement("span");
         if (item.is_closed_all_day) details.textContent = "Closed all day";
-        else details.textContent = readableTime(item.start_time) + "–" + readableTime(item.end_time);
+        else details.textContent = "Open hours: " + readableTime(item.start_time) + "–" + readableTime(item.end_time);
         row.appendChild(details);
         if (item.reason) {
           var reason = document.createElement("span");
