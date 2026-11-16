@@ -8,9 +8,13 @@
   const message = document.getElementById('plan-msg');
   const scheduleMessage = document.getElementById('plan-schedule');
   const list = document.getElementById('plan-list');
+  const historyList = document.getElementById('visit-history-list');
+  const hideRespondedCheckbox = document.getElementById('hide-responded-visits');
+  const attendanceMessage = document.getElementById('attendance-message');
   const quotaBadge = document.getElementById('daily-quota-badge');
   const submitButton = document.getElementById('plan-submit');
   const visits = [];
+  const historyVisits = [];
   let scheduleIntervals = [];
   let scheduleReady = false;
   let scheduleLoading = false;
@@ -84,6 +88,11 @@
 
   function visitDuration(visit) {
     return timestampMinutes(visit.exit_time) - timestampMinutes(visit.intended_arrival);
+  }
+
+  function getAttendanceResponse(visit) {
+    if (typeof visit.did_attend === 'boolean') return visit.did_attend ? 'kept' : 'not-kept';
+    return null;
   }
 
   function bookedMinutes(date) {
@@ -255,8 +264,85 @@
     return item;
   }
 
+  function makeHistoryVisitElement(visit) {
+    const item = document.createElement('div');
+    item.className = 'visit-item attendance-item';
+
+    const info = document.createElement('div');
+    info.className = 'visit-info';
+    const title = document.createElement('b');
+    title.textContent = `${timestampDatePart(visit.intended_arrival)} · ${formatTime(visit.intended_arrival)} – ${formatTime(visit.exit_time)} (${visitDuration(visit)} min)`;
+    info.append(title);
+
+    const tags = document.createElement('div');
+    tags.className = 'visit-tags';
+    equipmentColumns
+      .filter(([, column]) => visit[column])
+      .forEach(([label]) => {
+        const tag = document.createElement('span');
+        tag.className = 'visit-tag';
+        tag.textContent = label;
+        tags.append(tag);
+      });
+    info.append(tags);
+
+    const response = getAttendanceResponse(visit);
+    const visitId = String(visit.planned_visit_id);
+    const options = document.createElement('fieldset');
+    options.className = 'attendance-options';
+    const legend = document.createElement('legend');
+    legend.className = 'sr';
+    legend.textContent = 'Did you keep this reservation?';
+    options.append(legend);
+
+    [
+      ['kept', 'Kept'],
+      ['not-kept', 'Not kept'],
+    ].forEach(([value, labelText]) => {
+      const label = document.createElement('label');
+      label.className = 'attendance-choice';
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = `attendance-${visitId}`;
+      radio.value = value;
+      radio.dataset.visitId = visitId;
+      radio.checked = response === value;
+      label.append(radio, document.createTextNode(labelText));
+      options.append(label);
+    });
+
+    item.append(info, options);
+    return item;
+  }
+
+  function renderHistoryVisits() {
+    const recentVisits = [...historyVisits]
+      .sort((a, b) => String(b.intended_arrival).localeCompare(String(a.intended_arrival)));
+    const visibleVisits = hideRespondedCheckbox.checked
+      ? recentVisits.filter((visit) => !getAttendanceResponse(visit))
+      : recentVisits;
+
+    historyList.replaceChildren();
+    if (!recentVisits.length) {
+      const empty = document.createElement('p');
+      empty.className = 'mute';
+      empty.textContent = 'No visits from the last 7 days.';
+      historyList.append(empty);
+      return;
+    }
+    if (!visibleVisits.length) {
+      const empty = document.createElement('p');
+      empty.className = 'mute';
+      empty.textContent = 'All recent visits have a response. Uncheck “Hide visits already answered” to view them.';
+      historyList.append(empty);
+      return;
+    }
+    visibleVisits.forEach((visit) => historyList.append(makeHistoryVisitElement(visit)));
+  }
+
   function renderVisits() {
     updateQuota();
+    renderHistoryVisits();
     const now = new Date();
     const nowLocal = `${localDateString(now)}T${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:00`;
     const upcoming = visits
@@ -287,6 +373,23 @@
       renderVisits();
     } catch (error) {
       showMessage(error.message || 'Could not load your upcoming visits.', true);
+    }
+  }
+
+  async function loadHistoryVisits() {
+    try {
+      const payload = await readResponse(await fetch('/plan/history', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      }));
+      historyVisits.splice(0, historyVisits.length, ...(Array.isArray(payload.visits) ? payload.visits : []));
+      renderHistoryVisits();
+    } catch (error) {
+      historyList.replaceChildren();
+      const unavailable = document.createElement('p');
+      unavailable.className = 'mute';
+      unavailable.textContent = error.message || 'Recent visits could not be loaded.';
+      historyList.append(unavailable);
     }
   }
 
@@ -368,6 +471,38 @@
     }
   });
 
+  historyList.addEventListener('change', (event) => {
+    const radio = event.target.closest('input[type="radio"][data-visit-id]');
+    if (!radio) return;
+    const row = radio.closest('.attendance-item');
+    const rowRadios = row.querySelectorAll('input[type="radio"]');
+    rowRadios.forEach((input) => { input.disabled = true; });
+    attendanceMessage.textContent = 'Saving response…';
+
+    fetch(`/plan/visits/${encodeURIComponent(radio.dataset.visitId)}/attendance`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ did_attend: radio.value === 'kept' }),
+    })
+      .then(readResponse)
+      .then((payload) => {
+        if (!payload.visit) throw new Error('The server did not confirm the attendance response.');
+        const index = historyVisits.findIndex(
+          (visit) => String(visit.planned_visit_id) === radio.dataset.visitId
+        );
+        if (index >= 0) historyVisits[index] = payload.visit;
+        attendanceMessage.textContent = 'Response saved.';
+        renderHistoryVisits();
+      })
+      .catch((error) => {
+        attendanceMessage.textContent = error.message || 'Could not save your response.';
+        renderHistoryVisits();
+      });
+  });
+
+  hideRespondedCheckbox.addEventListener('change', renderHistoryVisits);
+
   dateInput.addEventListener('change', () => {
     showMessage('');
     updateQuota();
@@ -379,6 +514,7 @@
   setDateBounds();
   loadSchedule();
   loadVisits();
+  loadHistoryVisits();
   window.setInterval(() => {
     const previousDate = dateInput.value;
     setDateBounds();

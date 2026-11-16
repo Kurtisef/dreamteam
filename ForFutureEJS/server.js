@@ -119,28 +119,42 @@ const plannedVisitSelect = [
   'weight_machines',
   'cardio_machines',
 ].join(',');
+const plannedVisitHistorySelect = `${plannedVisitSelect},did_attend,attendance_responded_at`;
 
-async function requestPlannedVisits({ profileId, method = 'GET', date, visitId, beforeArrival, body } = {}) {
+
+async function requestPlannedVisits({
+  profileId,
+  method = 'GET',
+  date,
+  visitId,
+  afterArrival,
+  beforeArrival,
+  beforeExit,
+  includeAttendance = false,
+  newestFirst = false,
+  body,
+} = {}) {
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     throw new Error('Planned visit database access is not configured.');
   }
 
   const url = new URL(`${supabaseUrl}/rest/v1/planned_visits`);
-  url.searchParams.set('select', plannedVisitSelect);
+  url.searchParams.set('select', includeAttendance ? plannedVisitHistorySelect : plannedVisitSelect);
   if (profileId !== undefined) url.searchParams.set('profile_id', `eq.${profileId}`);
   if (visitId !== undefined) url.searchParams.set('planned_visit_id', `eq.${visitId}`);
-  if (beforeArrival !== undefined) {
-    url.searchParams.set('intended_arrival', `lt.${beforeArrival}`);
-  }
+  const filters = [];
+  if (afterArrival !== undefined) filters.push(`intended_arrival.gte.${afterArrival}`);
+  if (beforeArrival !== undefined) filters.push(`intended_arrival.lt.${beforeArrival}`);
+  if (beforeExit !== undefined) filters.push(`exit_time.lte.${beforeExit}`);
   if (date) {
     const nextDate = new Date(`${date}T00:00:00Z`);
     nextDate.setUTCDate(nextDate.getUTCDate() + 1);
     const nextDateString = nextDate.toISOString().slice(0, 10);
-    url.searchParams.set(
-      'and',
-      `(intended_arrival.gte.${date}T00:00:00,intended_arrival.lt.${nextDateString}T00:00:00)`
-    );
+    filters.push(`intended_arrival.gte.${date}T00:00:00`);
+    filters.push(`intended_arrival.lt.${nextDateString}T00:00:00`);
   }
+  if (filters.length) url.searchParams.set('and', `(${filters.join(',')})`);
+  if (newestFirst) url.searchParams.set('order', 'intended_arrival.desc');
 
   const headers = {
     apikey: supabaseServiceRoleKey,
@@ -166,6 +180,41 @@ async function requestPlannedVisits({ profileId, method = 'GET', date, visitId, 
   if (!response.ok) {
     const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
     throw new Error(message);
+  }
+  return result;
+}
+
+async function requestExpiredPlannedVisitCleanup(beforeArrival) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Planned visit database access is not configured.');
+  }
+
+  const response = await fetch(
+    `${supabaseUrl}/rest/v1/rpc/expire_planned_visits_and_update_metrics`,
+    {
+      method: 'POST',
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ p_before_arrival: beforeArrival }),
+    }
+  );
+  const responseText = await response.text();
+  let result;
+  try {
+    result = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    result = null;
+  }
+
+  if (!response.ok) {
+    const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
+    throw new Error(message);
+  }
+  if (!Number.isInteger(result) || result < 0) {
+    throw new Error('Supabase returned an invalid expired reservation count.');
   }
   return result;
 }
@@ -494,10 +543,19 @@ async function deleteOldPlannedVisits() {
     .join(':');
   const cutoff = `${cutoffDay}T${cutoffTime}`;
 
-  return requestPlannedVisits({
-    method: 'DELETE',
-    beforeArrival: cutoff,
-  });
+  return requestExpiredPlannedVisitCleanup(cutoff);
+}
+
+function getRecentCompletedVisitWindow() {
+  const gymNow = getGymClockParts();
+  const beforeArrival = `${gymNow.date}T${String(gymNow.hour).padStart(2, '0')}:${String(gymNow.minute).padStart(2, '0')}:${String(gymNow.second).padStart(2, '0')}`;
+  const cutoffDate = new Date(`${gymNow.date}T00:00:00Z`);
+  cutoffDate.setUTCHours(gymNow.hour, gymNow.minute, gymNow.second, 0);
+  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 7);
+  return {
+    afterArrival: cutoffDate.toISOString().slice(0, 19),
+    beforeArrival,
+  };
 }
 
 function parsePlannedVisitInput(body) {
@@ -1301,6 +1359,66 @@ app.get('/plan/visits', async (req, res) => {
   } catch (error) {
     console.error('Planned visits fetch failed:', error);
     return res.status(500).json({ error: 'Could not load your planned visits.' });
+  }
+});
+
+app.get('/plan/history', async (req, res) => {
+  const profile = requireVisitProfile(req, res);
+  if (!profile) return;
+  const { afterArrival, beforeArrival } = getRecentCompletedVisitWindow();
+
+  try {
+    const visits = await requestPlannedVisits({
+      profileId: profile.profile_id,
+      afterArrival,
+      beforeArrival,
+      beforeExit: beforeArrival,
+      includeAttendance: true,
+      newestFirst: true,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ visits: Array.isArray(visits) ? visits : [] });
+  } catch (error) {
+    console.error('Recent planned visits fetch failed:', error);
+    return res.status(500).json({ error: 'Could not load recent visits.' });
+  }
+});
+
+app.patch('/plan/visits/:visitId/attendance', async (req, res) => {
+  const profile = requireVisitProfile(req, res);
+  if (!profile) return;
+
+  const visitId = req.params.visitId;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(visitId)) {
+    return res.status(400).json({ error: 'Invalid planned visit ID.' });
+  }
+  if (typeof req.body?.did_attend !== 'boolean') {
+    return res.status(400).json({ error: 'Choose kept or not kept.' });
+  }
+
+  const { afterArrival, beforeArrival } = getRecentCompletedVisitWindow();
+  try {
+    const updated = await requestPlannedVisits({
+      profileId: profile.profile_id,
+      visitId,
+      method: 'PATCH',
+      afterArrival,
+      beforeArrival,
+      beforeExit: beforeArrival,
+      includeAttendance: true,
+      body: {
+        did_attend: req.body.did_attend,
+        attendance_responded_at: new Date().toISOString(),
+      },
+    });
+    if (!Array.isArray(updated) || !updated[0]) {
+      return res.status(404).json({ error: 'That completed visit was not found in the last 7 days.' });
+    }
+    res.set('Cache-Control', 'no-store');
+    return res.json({ visit: updated[0] });
+  } catch (error) {
+    console.error('Planned visit attendance save failed:', error);
+    return res.status(500).json({ error: 'Could not save your attendance response.' });
   }
 });
 
