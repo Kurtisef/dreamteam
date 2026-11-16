@@ -1765,6 +1765,35 @@ app.get('/operating-hours', async (req, res) => {
   }
 });
 
+app.get('/schedule-exceptions', async (req, res) => {
+  const startDate = typeof req.query.start_date === 'string' ? req.query.start_date : '';
+  const endDate = typeof req.query.end_date === 'string' ? req.query.end_date : '';
+  const validDate = (date) => /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+    && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  if (!validDate(startDate) || !validDate(endDate) || startDate > endDate) {
+    return res.status(400).json({ error: 'Provide a valid start_date and end_date range.' });
+  }
+  try {
+    const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+    url.searchParams.set('select', 'exception_date,start_time,end_time,reason,is_closed_all_day');
+    url.searchParams.set('exception_date', `gte.${startDate}`);
+    url.searchParams.set('and', `(exception_date.lte.${endDate})`);
+    url.searchParams.set('order', 'exception_date.asc,start_time.asc');
+    const response = await fetch(url, { headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    } });
+    const rows = await response.json();
+    if (!response.ok || !Array.isArray(rows)) throw new Error('Schedule exceptions unavailable.');
+    res.set('Cache-Control', 'no-store');
+    return res.json(rows);
+  } catch (error) {
+    console.error('Schedule exceptions fetch failed:', error);
+    return res.status(503).json({ error: 'Could not load upcoming schedule changes.' });
+  }
+});
+
 app.get('/capacity/latest', async (req, res) => {
   try {
     const latestCapacity = await requestLatestCapacityLog();

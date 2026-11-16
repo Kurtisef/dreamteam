@@ -32,7 +32,7 @@
   </nav>
 </div></header>
 
-<main>
+<main data-gym-time-zone="<%= gymTimeZone %>">
   <div class="demo"><span>Preview a state:</span><label for="s-live">Live data</label><label for="s-closed">Closed</label><label for="s-off">Sensors offline</label></div>
   <section class="screen week" aria-label="Week view">
     <h2>Week view</h2>
@@ -44,6 +44,10 @@
       <div class="tip"><b>Second Best Time</b>Sat after 4 PM (predicted)</div>
       <div class="tip t-hot"><b>Busiest Time</b>Mon to Wed, 5 to 7 PM</div>
     </div>
+    <section class="card upcoming-exceptions" aria-labelledby="upcoming-exceptions-title">
+      <h3 id="upcoming-exceptions-title">Upcoming schedule changes</h3>
+      <div id="upcoming-exceptions-list" role="status" aria-live="polite"><p class="mute">Loading schedule changes…</p></div>
+    </section>
     <div class="card">
       <label class="mobile-day-picker" for="mobile-day">Choose a day
         <select id="mobile-day" aria-label="Choose a day">
@@ -94,6 +98,7 @@
 </div>
 <%- include('partials/auth-dialog') %>
 <script src="/auth.js" defer></script>
+<script src="/schedule-exceptions.js" defer></script>
 <% if (user && user.role === 'user') { %><script src="/app-open.js" defer></script><% } %>
 <script>
   const heat = document.querySelector('.heat');

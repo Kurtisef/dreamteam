@@ -2617,3 +2617,10 @@ main {
     align-items: stretch;
   }
 }
+.upcoming-exceptions h2,
+.upcoming-exceptions h3 { margin-top: 0; }
+.home .upcoming-exceptions { margin: 20px 0; }
+.week .upcoming-exceptions { margin: 0 0 16px; }
+.exception-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .65rem; }
+.exception-list li { display: flex; flex-wrap: wrap; gap: .35rem .75rem; align-items: baseline; border-top: 1px solid rgba(20, 35, 50, .12); padding-top: .65rem; }
+.exception-reason { flex-basis: 100%; color: #52616d; font-size: .92em; }
