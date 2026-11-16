@@ -20,7 +20,7 @@
   <nav class="tabs" aria-label="Screens">
     <a href="/home" aria-current="page">Home</a>
     <% if (user && user.role === 'admin') { %>
-    <a href="/admin">Front Desk</a><a href="/admin/okrs">OKRs</a>
+    <a href="/admin">Front Desk</a><a href="/admin/schedule">Schedule</a><a href="/admin/okrs">OKRs</a>
     <% } else { %>
     <a href="/live">Live feed</a><a href="/week">Week view</a>
     <a href="/plan">Plan visit</a>
@@ -28,7 +28,7 @@
   </nav>
 </div></header>
 
-<main>
+<main data-gym-time-zone="<%= gymTimeZone %>">
   <section class="screen home" aria-label="Home">
     <div id="capacity-error" class="banner capacity-error" role="status" aria-live="polite" hidden></div>
     <div id="app-open-status" class="banner capacity-error" role="status" aria-live="polite" hidden></div>
@@ -50,6 +50,11 @@
           <span class="d">Time to get on machines or weights once inside</span></div>
       </div>
     </div>
+
+    <section class="card upcoming-exceptions" aria-labelledby="upcoming-exceptions-title">
+      <h2 id="upcoming-exceptions-title">Upcoming schedule changes</h2>
+      <div id="upcoming-exceptions-list" role="status" aria-live="polite"><p class="mute">Loading schedule changes…</p></div>
+    </section>
 
     <div class="card hourly">
       <h2>Rest of today</h2>
@@ -76,5 +81,6 @@
 <script src="/auth.js" defer></script>
 <% if (user && user.role === 'user') { %><script src="/app-open.js" defer></script><% } %>
 <script src="/home.js" defer></script>
+<script src="/schedule-exceptions.js" defer></script>
 </body>
 </html>

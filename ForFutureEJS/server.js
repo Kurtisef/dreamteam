@@ -639,6 +639,39 @@ function parseScheduleTime(value) {
   return Number(match[1]) * 60 + Number(match[2]);
 }
 
+function scheduleExceptionRangesOverlap(candidate, existingRows) {
+  const rangeFor = (item) => {
+    if (item.is_closed_all_day === true) return { start: 0, end: 1440 };
+    const start = parseScheduleTime(item.start_time);
+    let end = parseScheduleTime(item.end_time);
+    if (start === null || end === null) return null;
+    if (end <= start) end += 1440;
+    return { start, end };
+  };
+  const current = rangeFor(candidate);
+  if (!current) return false;
+  return existingRows.some((item) => {
+    const other = rangeFor(item);
+    if (!other) return false;
+    return [-1440, 0, 1440].some((offset) => (
+      current.start < other.end + offset && other.start + offset < current.end
+    ));
+  });
+}
+
+async function requestScheduleExceptionsForDate(date) {
+  const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+  url.searchParams.set('select', 'schedule_id,exception_date,start_time,end_time,is_closed_all_day');
+  url.searchParams.set('exception_date', `eq.${date}`);
+  const response = await fetch(url, { headers: {
+    apikey: supabaseServiceRoleKey,
+    Authorization: `Bearer ${supabaseServiceRoleKey}`,
+  } });
+  const rows = await response.json();
+  if (!response.ok || !Array.isArray(rows)) throw new Error('Could not check for overlapping schedule changes.');
+  return rows;
+}
+
 function reservationFitsSchedule(startMinute, endMinute, scheduleRows) {
   if (!Array.isArray(scheduleRows)) return false;
 
@@ -1765,6 +1798,232 @@ app.get('/operating-hours', async (req, res) => {
   }
 });
 
+app.get('/schedule-exceptions', async (req, res) => {
+  const startDate = typeof req.query.start_date === 'string' ? req.query.start_date : '';
+  const endDate = typeof req.query.end_date === 'string' ? req.query.end_date : '';
+  const validDate = (date) => /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+    && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  if (!validDate(startDate) || !validDate(endDate) || startDate > endDate) {
+    return res.status(400).json({ error: 'Provide a valid start_date and end_date range.' });
+  }
+  try {
+    const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+    url.searchParams.set('select', 'exception_date,start_time,end_time,reason,is_closed_all_day');
+    url.searchParams.set('exception_date', `gte.${startDate}`);
+    url.searchParams.set('and', `(exception_date.lte.${endDate})`);
+    url.searchParams.set('order', 'exception_date.asc,start_time.asc');
+    const response = await fetch(url, { headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    } });
+    const rows = await response.json();
+    if (!response.ok || !Array.isArray(rows)) throw new Error('Schedule exceptions unavailable.');
+    res.set('Cache-Control', 'no-store');
+    return res.json(rows);
+  } catch (error) {
+    console.error('Schedule exceptions fetch failed:', error);
+    return res.status(503).json({ error: 'Could not load upcoming schedule changes.' });
+  }
+});
+
+app.get('/admin/schedule-exceptions', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  try {
+    const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+    url.searchParams.set('select', 'schedule_id,exception_date,start_time,end_time,reason,is_closed_all_day');
+    url.searchParams.set('exception_date', `gte.${getGymClockParts().date}`);
+    url.searchParams.set('order', 'exception_date.asc,start_time.asc');
+    const response = await fetch(url, { headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    } });
+    const rows = await response.json();
+    if (!response.ok || !Array.isArray(rows)) throw new Error(rows?.message || 'Could not load future schedule changes.');
+    res.set('Cache-Control', 'no-store');
+    return res.json(rows);
+  } catch (error) {
+    console.error('Admin schedule exceptions fetch failed:', error);
+    return res.status(503).json({ error: 'Could not load future schedule changes.' });
+  }
+});
+
+app.get('/admin/schedule-options', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  const dayOfWeek = Number(req.query.day_of_week);
+  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) {
+    return res.status(400).json({ error: 'Day of week must be a number from 0 to 6.' });
+  }
+  try {
+    const url = new URL(`${supabaseUrl}/rest/v1/operating_hours`);
+    url.searchParams.set('select', 'schedule_id,open_time,close_time,is_closed_all_day');
+    url.searchParams.set('day_of_week', `eq.${dayOfWeek}`);
+    url.searchParams.set('order', 'open_time.asc');
+    const response = await fetch(url, { headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    } });
+    const rows = await response.json();
+    if (!response.ok || !Array.isArray(rows)) throw new Error('Could not load regular hours.');
+    return res.json(rows);
+  } catch (error) {
+    console.error('Schedule options fetch failed:', error);
+    return res.status(503).json({ error: 'Could not load regular hours for this date.' });
+  }
+});
+
+app.post('/admin/schedule-exceptions', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  const { exception_date: date } = req.body;
+  const validDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+    && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  const closed = req.body.is_closed_all_day === true;
+  const timePattern = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
+  if (!validDate || date < getGymClockParts().date) {
+    return res.status(400).json({ error: 'Choose a valid date from today onward.' });
+  }
+  if (!closed && (!timePattern.test(req.body.start_time || '') || !timePattern.test(req.body.end_time || ''))) {
+    return res.status(400).json({ error: 'Enter valid start and end times, or mark the gym closed all day.' });
+  }
+  try {
+    const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
+    const scheduleUrl = new URL(`${supabaseUrl}/rest/v1/operating_hours`);
+    scheduleUrl.searchParams.set('select', 'schedule_id');
+    scheduleUrl.searchParams.set('day_of_week', `eq.${dayOfWeek}`);
+    scheduleUrl.searchParams.set('order', 'open_time.asc');
+    scheduleUrl.searchParams.set('limit', '1');
+    const scheduleResponse = await fetch(scheduleUrl, { headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    } });
+    const matchingSchedules = await scheduleResponse.json();
+    if (!scheduleResponse.ok || !Array.isArray(matchingSchedules) || !matchingSchedules.length) {
+      return res.status(400).json({ error: 'No regular schedule is configured for that date.' });
+    }
+    const scheduleId = matchingSchedules[0].schedule_id;
+    const sameDateExceptions = await requestScheduleExceptionsForDate(date);
+    if (scheduleExceptionRangesOverlap({
+      start_time: req.body.start_time,
+      end_time: req.body.end_time,
+      is_closed_all_day: closed,
+    }, sameDateExceptions)) {
+      return res.status(409).json({ error: 'This schedule change overlaps another exception on that date.' });
+    }
+    const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify({
+        schedule_id: scheduleId,
+        exception_date: date,
+        start_time: closed ? '00:00:00' : req.body.start_time,
+        end_time: closed ? '23:59:59' : req.body.end_time,
+        reason: typeof req.body.reason === 'string' ? req.body.reason.trim() || null : null,
+        is_closed_all_day: closed,
+      }),
+    });
+    const responseText = await response.text();
+    let result;
+    try { result = responseText ? JSON.parse(responseText) : {}; } catch { result = { message: responseText }; }
+    if (!response.ok) {
+      if (response.status === 409 || result.code === '23505') {
+        return res.status(409).json({ error: 'A schedule change already exists for this regular schedule and date. Edit the existing entry instead.' });
+      }
+      console.error('Schedule exception create rejected:', result);
+      return res.status(500).json({ error: result.message || result.details || 'Could not add schedule change.' });
+    }
+    return res.status(201).json({ ok: true, rows: result });
+  } catch (error) {
+    console.error('Schedule exception create failed:', error);
+    return res.status(500).json({ error: error.message || 'Could not add schedule change.' });
+  }
+});
+
+app.patch('/admin/schedule-exceptions', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  const { schedule_id: scheduleId, exception_date: date } = req.body;
+  const validDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+    && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  const closed = req.body.is_closed_all_day === true;
+  const timePattern = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
+  if (!scheduleId || !validDate || date < getGymClockParts().date) {
+    return res.status(400).json({ error: 'A valid future schedule and date are required.' });
+  }
+  if (!closed && (!timePattern.test(req.body.start_time || '') || !timePattern.test(req.body.end_time || ''))) {
+    return res.status(400).json({ error: 'Enter valid start and end times, or mark the gym closed all day.' });
+  }
+  try {
+    const sameDateExceptions = (await requestScheduleExceptionsForDate(date))
+      .filter((item) => String(item.schedule_id) !== String(scheduleId));
+    if (scheduleExceptionRangesOverlap({
+      start_time: req.body.start_time,
+      end_time: req.body.end_time,
+      is_closed_all_day: closed,
+    }, sameDateExceptions)) {
+      return res.status(409).json({ error: 'This schedule change overlaps another exception on that date.' });
+    }
+    const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+    url.searchParams.set('schedule_id', `eq.${scheduleId}`);
+    url.searchParams.set('exception_date', `eq.${date}`);
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify({
+        start_time: closed ? '00:00:00' : req.body.start_time,
+        end_time: closed ? '23:59:59' : req.body.end_time,
+        reason: typeof req.body.reason === 'string' ? req.body.reason.trim() || null : null,
+        is_closed_all_day: closed,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result?.message || 'Could not update schedule exception.');
+    return res.json({ ok: true, rows: result });
+  } catch (error) {
+    console.error('Schedule exception update failed:', error);
+    return res.status(500).json({ error: 'Could not update schedule exception.' });
+  }
+});
+
+app.delete('/admin/schedule-exceptions', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  const { schedule_id: scheduleId, exception_date: date } = req.body;
+  if (!scheduleId || typeof date !== 'string' || date < getGymClockParts().date) {
+    return res.status(400).json({ error: 'A future schedule exception is required.' });
+  }
+  try {
+    const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+    url.searchParams.set('schedule_id', `eq.${scheduleId}`);
+    url.searchParams.set('exception_date', `eq.${date}`);
+    const response = await fetch(url, { method: 'DELETE', headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      Prefer: 'return=representation',
+    } });
+    if (!response.ok) throw new Error('Could not remove schedule exception.');
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Schedule exception removal failed:', error);
+    return res.status(500).json({ error: 'Could not remove schedule exception.' });
+  }
+});
+
 app.get('/capacity/latest', async (req, res) => {
   try {
     const latestCapacity = await requestLatestCapacityLog();
@@ -1852,6 +2111,11 @@ app.get('/admin/okrs', (req, res) => {
   if (!req.profile) return res.redirect('/home?adminLogin=required');
   if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
   return res.render('okrs', { user: req.profile, currentPath: req.path });
+});
+app.get('/admin/schedule', (req, res) => {
+  if (!req.profile) return res.redirect('/home?adminLogin=required');
+  if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
+  return res.render('schedule-admin', { user: req.profile, currentPath: req.path, gymTimeZone });
 });
 
 app.use((req, res) => {
