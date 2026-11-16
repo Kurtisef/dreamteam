@@ -80,10 +80,6 @@
     }
     adminDialog?.showModal();
   });
-  document.getElementById('admin-auth-back')?.addEventListener('click', () => {
-    adminDialog?.close();
-    openDialog();
-  });
   document.getElementById('admin-auth-close')?.addEventListener('click', () => adminDialog?.close());
   dialog.addEventListener('close', () => {
     form.reset();
