@@ -15,10 +15,6 @@
 <input class="sr" type="radio" name="t" id="t-live" aria-label="Live feed">
 <input class="sr" type="radio" name="t" id="t-week" checked aria-label="Week view">
 <input class="sr" type="radio" name="t" id="t-plan" aria-label="Plan your visit">
-<input class="sr" type="radio" name="s" id="s-live" checked aria-label="Preview live data">
-<input class="sr" type="radio" name="s" id="s-closed" aria-label="Preview closed">
-<input class="sr" type="radio" name="s" id="s-off" aria-label="Preview sensors offline">
-
 <div class="app">
 <header class="top"><div class="in">
   <h1>BYU Gym Planner</h1>
@@ -32,13 +28,13 @@
   </nav>
 </div></header>
 
-<main data-gym-time-zone="<%= gymTimeZone %>">
-  <div class="demo"><span>Preview a state:</span><label for="s-live">Live data</label><label for="s-closed">Closed</label><label for="s-off">Sensors offline</label></div>
-  <section class="screen week" aria-label="Week view">
+<main>
+  <section class="screen week<%= isGymClosed ? ' is-closed' : ' is-loading' %>" aria-label="Week view" data-gym-time-zone="<%= gymTimeZone %>">
     <h2>Week view</h2>
-    <p class="lead">Pick your quietest hour. Solid squares are what happened. Striped squares are predictions.</p>
-    <div class="banner st-off" role="alert"><b>Live estimates are unavailable.</b> The gym's sensors aren't sending data right now.</div>
-    <div class="week-offline" role="status" aria-live="polite">Connection error</div>
+    <p class="lead">Pick your quietest hour. Solid squares show the latest reading in each hour. Striped squares are predictions.</p>
+    <div class="week-loading" role="status" aria-live="polite">Loading live capacity data…</div>
+    <div class="week-closed" role="status">The gym is closed. Capacity data is available from 6 AM to 10 PM.</div>
+    <div class="week-offline" role="alert" aria-live="assertive">There was an error connecting to the live data.</div>
     <div class="tips">
       <div class="tip"><b>Best Time</b>Fri 9 to 11 AM (predicted)</div>
       <div class="tip"><b>Second Best Time</b>Sat after 4 PM (predicted)</div>
@@ -49,13 +45,16 @@
       <div id="upcoming-exceptions-list" role="status" aria-live="polite"><p class="mute">Loading schedule changes…</p></div>
     </section>
     <div class="card">
-      <label class="mobile-day-picker" for="mobile-day">Choose a day
-        <select id="mobile-day" aria-label="Choose a day">
-          <option value="0">Monday</option><option value="1">Tuesday</option>
-          <option value="2">Wednesday</option><option value="3">Thursday</option>
-          <option value="4">Friday</option><option value="5">Saturday</option>
-        </select>
-      </label>
+      <div class="hour-picker-group week-day-picker">
+        <label class="hour-picker-label" for="week-day-picker-trigger">Choose a day</label>
+        <div class="hour-picker-control">
+          <button id="week-day-picker-trigger" class="hour-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="week-day-picker-options">
+            <span id="week-day-picker-value">Monday</span>
+            <span class="hour-picker-chevron" aria-hidden="true"></span>
+          </button>
+          <div id="week-day-picker-options" class="hour-picker-options" role="listbox" aria-label="Choose a day" hidden></div>
+        </div>
+      </div>
       <div class="scroll">
       <div class="heat" aria-label="Gym capacity by day and hour, Monday to Saturday">
         <span></span>
@@ -87,11 +86,10 @@
       </div>
       </div>
       <div class="legend">
-        <span><i class="capacity-green"></i>Green: 0–45</span><span><i class="capacity-yellow"></i>Yellow: &gt;45–90</span><span><i class="capacity-red"></i>Red: &gt;90–135</span>
+        <span><i class="capacity-green"></i>Green: under 35%</span><span><i class="capacity-yellow"></i>Yellow: 35–69%</span><span><i class="capacity-red"></i>Red: 70–100%</span>
         <span><i class="predicted-sample"></i>Predicted</span><span><i class="x"></i>Closed</span>
       </div>
       <p class="note" id="week-data-status" role="status" aria-live="polite">Loading capacity history…</p>
-      <p class="note">Sunday is left out on purpose: the gym is closed all day, so there is no data to show.</p>
     </div>
   </section>
 </main>
@@ -102,7 +100,10 @@
 <% if (user && user.role === 'user') { %><script src="/app-open.js" defer></script><% } %>
 <script>
   const heat = document.querySelector('.heat');
-  const dayPicker = document.querySelector('#mobile-day');
+  const dayPickerTrigger = document.querySelector('#week-day-picker-trigger');
+  const dayPickerValue = document.querySelector('#week-day-picker-value');
+  const dayPickerOptions = document.querySelector('#week-day-picker-options');
+  const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const gridItems = [...heat.children];
   const today = new Date().getDay();
   let todayIndex = today === 0 ? -1 : today - 1;
@@ -121,6 +122,12 @@
 
   function selectDay(day) {
     heat.dataset.selectedDay = String(day);
+    dayPickerValue.textContent = dayNames[day];
+    dayPickerOptions.querySelectorAll('[role="option"]').forEach(option => {
+      const selected = Number(option.dataset.day) === day;
+      option.setAttribute('aria-selected', String(selected));
+      option.classList.toggle('is-selected', selected);
+    });
     heat.querySelectorAll('.dh[data-day]').forEach(header => {
       const index = Number(header.dataset.day);
       header.classList.toggle('active-day', index === day);
@@ -135,15 +142,86 @@
     });
   }
 
-  const initialDay = today === 0 ? 5 : today - 1;
-  dayPicker.value = String(initialDay);
-  selectDay(initialDay);
-  dayPicker.addEventListener('change', () => selectDay(Number(dayPicker.value)));
+  dayNames.forEach((name, day) => {
+    const option = document.createElement('div');
+    option.className = 'hour-picker-option';
+    option.setAttribute('role', 'option');
+    option.setAttribute('tabindex', '-1');
+    option.dataset.day = String(day);
+    option.textContent = name;
+    option.addEventListener('click', () => {
+      selectDay(day);
+      dayPickerOptions.hidden = true;
+      dayPickerTrigger.setAttribute('aria-expanded', 'false');
+      dayPickerTrigger.focus();
+    });
+    option.addEventListener('keydown', event => {
+      const options = Array.from(dayPickerOptions.querySelectorAll('[role="option"]'));
+      const index = options.indexOf(option);
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const direction = event.key === 'ArrowDown' ? 1 : -1;
+        options[(index + direction + options.length) % options.length].focus();
+      } else if (event.key === 'Home' || event.key === 'End') {
+        event.preventDefault();
+        options[event.key === 'Home' ? 0 : options.length - 1].focus();
+      } else if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        option.click();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        dayPickerOptions.hidden = true;
+        dayPickerTrigger.setAttribute('aria-expanded', 'false');
+        dayPickerTrigger.focus();
+      }
+    });
+    dayPickerOptions.appendChild(option);
+  });
 
+  function openDayPicker() {
+    dayPickerOptions.hidden = false;
+    dayPickerTrigger.setAttribute('aria-expanded', 'true');
+    const selected = dayPickerOptions.querySelector('[aria-selected="true"]');
+    if (selected) selected.focus();
+  }
+
+  dayPickerTrigger.addEventListener('click', () => {
+    if (dayPickerOptions.hidden) openDayPicker();
+    else {
+      dayPickerOptions.hidden = true;
+      dayPickerTrigger.setAttribute('aria-expanded', 'false');
+    }
+  });
+  dayPickerTrigger.addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openDayPicker();
+    }
+  });
+  document.addEventListener('click', event => {
+    if (!event.target.closest('.week-day-picker .hour-picker-control')) {
+      dayPickerOptions.hidden = true;
+      dayPickerTrigger.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  const initialDay = today === 0 ? 5 : today - 1;
+  selectDay(initialDay);
+
+  const weekSection = document.querySelector('.week');
+  const gymHour = Number(new Intl.DateTimeFormat('en-US', {
+    timeZone: weekSection.dataset.gymTimeZone,
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date()));
+  const isGymClosed = gymHour < 6 || gymHour >= 22;
+  weekSection.classList.toggle('is-closed', isGymClosed);
+  weekSection.classList.toggle('is-loading', !isGymClosed);
   const capacityStatus = document.querySelector('#week-data-status');
-  fetch('/api/week-capacity')
+  if (!isGymClosed) {
+    fetch('/api/week-capacity')
     .then(response => {
-      if (!response.ok) throw new Error('Capacity history unavailable');
+      if (response.status !== 200) throw new Error('Week capacity API request failed.');
       return response.json();
     })
     .then(data => {
@@ -171,22 +249,23 @@
             cell.title = 'No capacity data for this hour';
             continue;
           }
-          const people = Math.max(0, Math.min(135, item.value));
-          cell.classList.add(people <= 45 ? 'capacity-green' : people <= 90 ? 'capacity-yellow' : 'capacity-red');
+          const percent = Math.max(0, Math.min(100, item.value));
+          cell.classList.add(percent < 35 ? 'capacity-green' : percent < 70 ? 'capacity-yellow' : 'capacity-red');
           if (item.source === 'forecast') cell.classList.add('p');
-          cell.title = `${item.source === 'forecast' ? 'Forecast average' : 'Recorded average'}: ${people.toFixed(1)} people${item.source === 'forecast' ? `, based on ${item.samples} prior week${item.samples === 1 ? '' : 's'}` : ''}`;
+          cell.title = `${item.source === 'forecast' ? 'Forecast average' : 'Latest hourly reading'}: ${percent.toFixed(1)}% of capacity${item.source === 'forecast' ? `, based on ${item.samples} prior week${item.samples === 1 ? '' : 's'}` : ''}`;
           cell.setAttribute('aria-label', cell.title);
         }
       }
       const selectedDay = data.todayIndex > 5 ? 5 : data.todayIndex;
-      dayPicker.value = String(selectedDay);
       selectDay(selectedDay);
-      capacityStatus.textContent = 'Each completed hour averages its four 15-minute counts. Forecasts average that hour from up to the previous four matching weekdays. Colors: green 0–45, yellow over 45–90, red over 90–135 people.';
+      weekSection.classList.remove('is-loading');
+      capacityStatus.textContent = 'Each hour uses its latest capacity reading. Forecasts average that hour from up to the previous four matching weekdays. Colors: green under 35%, yellow 35–69%, red 70–100%.';
     })
     .catch(() => {
-      capacityStatus.textContent = 'Capacity snapshots are unavailable. Check the Supabase connection and capacity_logs table permissions.';
-      heat.querySelectorAll('i[data-day]').forEach(cell => { cell.className = `day-${cell.dataset.day}`; });
+      weekSection.classList.remove('is-loading');
+      weekSection.classList.add('is-offline');
     });
+  }
 
 </script>
 </body>

@@ -861,10 +861,8 @@ async function requestHourlyCapacityAverages(date) {
   const startAt = formatUtcDatabaseTimestamp(historicalStart);
   const endAt = formatUtcDatabaseTimestamp(end);
   const pageSize = 1000;
-  const todaySumsByHour = Array(24).fill(0);
-  const todayCountsByHour = Array(24).fill(0);
-  const weekdaySumsByHour = Array(24).fill(0);
-  const weekdayCountsByHour = Array(24).fill(0);
+  const latestTodayByHour = new Map();
+  const latestWeekdayByDateHour = new Map();
   const targetWeekday = new Date(`${date}T00:00:00Z`).getUTCDay();
 
   for (let offset = 0; ; offset += pageSize) {
@@ -882,6 +880,7 @@ async function requestHourlyCapacityAverages(date) {
         Range: `${offset}-${offset + pageSize - 1}`,
       },
     });
+    if (response.status === 416) break;
     const responseText = await response.text();
     let rows;
     try {
@@ -916,30 +915,48 @@ async function requestHourlyCapacityAverages(date) {
       const parts = getZonedDateTimeParts(recordedAt);
       const localDate = `${parts.year}-${parts.month}-${parts.day}`;
       const hour = Number(parts.hour);
+      const reading = { recordedAt: recordedAt.getTime(), value: row.capacity_percentage };
       if (localDate === date) {
-        todaySumsByHour[hour] += row.capacity_percentage;
-        todayCountsByHour[hour] += 1;
+        const previous = latestTodayByHour.get(hour);
+        if (!previous || reading.recordedAt > previous.recordedAt) {
+          latestTodayByHour.set(hour, reading);
+        }
       } else if (
         localDate < date
         && localDate >= historicalStartDate.toISOString().slice(0, 10)
         && new Date(`${localDate}T00:00:00Z`).getUTCDay() === targetWeekday
       ) {
-        weekdaySumsByHour[hour] += row.capacity_percentage;
-        weekdayCountsByHour[hour] += 1;
+        const key = `${localDate}:${hour}`;
+        const previous = latestWeekdayByDateHour.get(key);
+        if (!previous || reading.recordedAt > previous.recordedAt) {
+          latestWeekdayByDateHour.set(key, { ...reading, hour });
+        }
       }
     }
 
     if (rows.length < pageSize) break;
   }
 
-  const averagesFor = (sums, counts) => Array.from({ length: 24 }, (_, hour) => ({
+  const todayAverages = Array.from({ length: 24 }, (_, hour) => {
+    const reading = latestTodayByHour.get(hour);
+    return { hour, average_capacity: reading ? reading.value : null, sample_count: reading ? 1 : 0 };
+  });
+  const weekdaySumsByHour = Array(24).fill(0);
+  const weekdayCountsByHour = Array(24).fill(0);
+  for (const reading of latestWeekdayByDateHour.values()) {
+    weekdaySumsByHour[reading.hour] += reading.value;
+    weekdayCountsByHour[reading.hour] += 1;
+  }
+  const weekdayAverages = Array.from({ length: 24 }, (_, hour) => ({
     hour,
-    average_capacity: counts[hour] ? sums[hour] / counts[hour] : null,
-    sample_count: counts[hour],
+    average_capacity: weekdayCountsByHour[hour]
+      ? weekdaySumsByHour[hour] / weekdayCountsByHour[hour]
+      : null,
+    sample_count: weekdayCountsByHour[hour],
   }));
   return {
-    today: averagesFor(todaySumsByHour, todayCountsByHour),
-    weekday: averagesFor(weekdaySumsByHour, weekdayCountsByHour),
+    today: todayAverages,
+    weekday: weekdayAverages,
     historical_start_date: historicalStartDate.toISOString().slice(0, 10),
   };
 }
@@ -1152,17 +1169,21 @@ async function readCapacityReadingsSince(since) {
   const pageSize = 1000;
   for (let offset = 0; ; offset += pageSize) {
     const url = new URL(`${supabaseUrl}/rest/v1/capacity_logs`);
-    url.searchParams.set('select', 'recorded_at,current_headcount');
+    url.searchParams.set('select', 'recorded_at,capacity_percentage');
     url.searchParams.set('recorded_at', `gte.${since.toISOString()}`);
-    url.searchParams.set('order', 'recorded_at.asc');
-    url.searchParams.set('limit', String(pageSize));
+    url.searchParams.set('order', 'recorded_at.asc,capacity_logs_id.asc');
     const response = await fetch(url, {
       headers: {
         apikey: supabaseServiceRoleKey,
         Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Range-Unit': 'items',
         Range: `${offset}-${offset + pageSize - 1}`,
       },
     });
+    // PostgREST can return 416 instead of an empty list when the requested
+    // range starts at or beyond the end of the table. That is the normal end
+    // of pagination, not a capacity-history failure.
+    if (response.status === 416) break;
     const result = await response.json().catch(() => null);
     if (!response.ok) throw new Error(result?.message || `Could not read capacity snapshots (${response.status}).`);
     if (!Array.isArray(result)) throw new Error('Capacity snapshots returned an unexpected response.');
@@ -1253,25 +1274,29 @@ async function buildWeekCapacity() {
   const startKey = weekStartKey(todayKey);
   const since = new Date(`${shiftDateKey(startKey, -35)}T00:00:00-07:00`);
   const snapshots = await readCapacityReadingsSince(since);
-  const quarterHours = new Map();
+  const latestReadingsByDateHour = new Map();
   for (const snapshot of snapshots) {
     const timestamp = snapshot.recorded_at.endsWith('Z') || /[+-]\d\d:\d\d$/.test(snapshot.recorded_at)
       ? snapshot.recorded_at
       : `${snapshot.recorded_at}Z`;
-    const parts = mountainDateParts(new Date(timestamp));
+    const recordedAt = new Date(timestamp);
+    const parts = mountainDateParts(recordedAt);
     const date = dateKeyFromParts(parts);
     const hour = Number(parts.hour);
-    const minute = Number(parts.minute);
-    if (hour < 6 || hour > 21 || minute % 15 !== 0) continue;
+    if (hour < 6 || hour > 21) continue;
     const key = `${date}:${hour}`;
-    if (!quarterHours.has(key)) quarterHours.set(key, new Map());
-    quarterHours.get(key).set(minute, Number(snapshot.current_headcount));
+    const previous = latestReadingsByDateHour.get(key);
+    if (!previous || recordedAt.getTime() > previous.recordedAt) {
+      latestReadingsByDateHour.set(key, {
+        recordedAt: recordedAt.getTime(),
+        value: Number(snapshot.capacity_percentage),
+      });
+    }
   }
 
-  const getHourlyAverage = (date, hour) => {
-    const readings = quarterHours.get(`${date}:${hour}`);
-    if (!readings || [0, 15, 30, 45].some(minute => !readings.has(minute))) return null;
-    return { value: [0, 15, 30, 45].reduce((sum, minute) => sum + readings.get(minute), 0) / 4 };
+  const getHourlyReading = (date, hour) => {
+    const reading = latestReadingsByDateHour.get(`${date}:${hour}`);
+    return reading ? { value: reading.value } : null;
   };
   const todayIndex = new Date(Date.UTC(
     Number(todayKey.slice(0, 4)), Number(todayKey.slice(5, 7)) - 1, Number(todayKey.slice(8, 10))
@@ -1289,14 +1314,14 @@ async function buildWeekCapacity() {
       }
       const hourIsPast = date < todayKey || (date === todayKey && hour < Number(nowParts.hour));
       if (!forecastDate || hourIsPast) {
-        const actual = getHourlyAverage(date, hour);
+        const actual = getHourlyReading(date, hour);
         days[date][hour] = actual ? { ...actual, source: 'actual' } : null;
         continue;
       }
 
       const priorValues = [];
       for (let weeksAgo = 1; weeksAgo <= 4; weeksAgo++) {
-        const prior = getHourlyAverage(shiftDateKey(date, -7 * weeksAgo), hour);
+        const prior = getHourlyReading(shiftDateKey(date, -7 * weeksAgo), hour);
         if (prior) priorValues.push(prior.value);
       }
       days[date][hour] = priorValues.length
@@ -2094,6 +2119,10 @@ function renderPage(view) {
     user: req.profile,
     currentPath: req.path,
     gymTimeZone: process.env.GYM_TIME_ZONE || 'America/Denver',
+    isGymClosed: view === 'week' && (() => {
+      const gymHour = getGymClockParts().hour;
+      return gymHour < 6 || gymHour >= 22;
+    })(),
   });
 }
 
@@ -2117,6 +2146,14 @@ app.get('/admin/schedule', (req, res) => {
   if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
   return res.render('schedule-admin', { user: req.profile, currentPath: req.path, gymTimeZone });
 });
+
+
+app.get('/403', (req,res) =>{
+  if (!req.profile) return res.redirect('/home?adminLogin=required');
+  if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
+  return res.render('admin', { user: req.profile, currentPath: req.path });
+});
+
 
 app.use((req, res) => {
   res.status(404).send('Page not found.');
