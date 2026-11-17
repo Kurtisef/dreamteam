@@ -17,6 +17,19 @@
   </form>
 </dialog>
 
+<% if (user && user.role === 'user') { %>
+<dialog id="profile-dialog" class="auth-dialog" aria-labelledby="profile-title">
+  <div>
+    <h2 id="profile-title">Profile</h2>
+    <p class="profile-detail"><strong>Username</strong><span><%= user.display_name %></span></p>
+    <p class="profile-detail"><strong>Email</strong><span><%= user.email %></span></p>
+    <p id="profile-msg" role="status" aria-live="polite"></p>
+    <button id="profile-close" type="button" class="link">Close</button>
+    <button id="account-delete" type="button" class="account-delete">Delete account</button>
+  </div>
+</dialog>
+<% } %>
+
 <dialog id="admin-auth-dialog" class="auth-dialog" aria-labelledby="admin-auth-title">
   <form action="/admin-login" method="post" novalidate>
     <h2 id="admin-auth-title">Admin login</h2>

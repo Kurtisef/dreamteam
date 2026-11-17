@@ -61,6 +61,7 @@ async function requestProfiles({ method = 'GET', filters = {}, body } = {}) {
     headers.Prefer = 'return=representation';
     options.body = JSON.stringify(body);
   }
+  if (method === 'DELETE') headers.Prefer = 'return=representation';
   const response = await fetch(url, options);
   const responseText = await response.text();
   let result;
@@ -2112,6 +2113,35 @@ app.post('/logout', (req, res) => {
   if (sessionId) profileSessions.delete(sessionId);
   clearSessionCookie(res);
   res.redirect(safeReturnPath(req.body.return_to));
+});
+
+app.delete('/account', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Log in to delete your account.' });
+  if (req.profile.role !== 'user') return res.status(403).json({ error: 'Only profile accounts can be deleted here.' });
+  if (req.profile.profile_id === null || req.profile.profile_id === undefined) {
+    return res.status(403).json({ error: 'Your profile is missing its database ID. Please log in again.' });
+  }
+
+  try {
+    const deleted = await requestProfiles({
+      method: 'DELETE',
+      filters: { profile_id: `eq.${req.profile.profile_id}` },
+    });
+    if (!Array.isArray(deleted) || deleted.length === 0) {
+      return res.status(404).json({ error: 'Your account could not be found.' });
+    }
+
+    const profileId = String(req.profile.profile_id);
+    for (const [sessionId, session] of profileSessions) {
+      if (String(session.profile.profile_id) === profileId) profileSessions.delete(sessionId);
+    }
+    appOpenLastRecordedAt.delete(profileId);
+    clearSessionCookie(res);
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Profile deletion failed:', error);
+    return res.status(500).json({ error: 'Could not delete your account. Please try again.' });
+  }
 });
 
 function renderPage(view) {

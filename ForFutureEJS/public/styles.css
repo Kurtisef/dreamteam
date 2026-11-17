@@ -1804,8 +1804,36 @@ main {
 
 }
 
+button.auth-user {
+
+  max-width: calc(100% - 220px);
+
+  padding: 0;
+
+  overflow: hidden;
+
+  border: 0;
+
+  background: transparent;
+
+  font: inherit;
+
+  text-align: right;
+
+  text-overflow: ellipsis;
+
+  white-space: nowrap;
+
+  cursor: pointer;
+
+}
+
+button.auth-user:hover { text-decoration: underline; }
+
 
 .auth-btn:focus-visible,
+
+.auth-user:focus-visible,
 
 .auth-dialog button:focus-visible,
 
@@ -1948,6 +1976,32 @@ main {
   margin: 12px auto 0;
 
 }
+
+.profile-detail {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.profile-detail strong { flex: 0 0 auto; }
+.profile-detail span { overflow-wrap: anywhere; text-align: right; }
+
+.auth-dialog .account-delete {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--hot);
+  color: #fff;
+  font: 600 1rem "Public Sans", system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.auth-dialog .account-delete:disabled { opacity: .6; cursor: wait; }
 
 .auth-admin-footer {
 
@@ -2501,6 +2555,8 @@ main {
     font-size: .75rem;
 
   }
+
+  button.auth-user { max-width: 100%; }
 
   .auth-btn {
 

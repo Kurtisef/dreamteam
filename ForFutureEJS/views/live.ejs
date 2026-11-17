@@ -20,7 +20,11 @@
 <header class="top"><div class="in">
   <h1>BYU Gym Planner</h1>
   <p>Know before you go. For BYU students and faculty.</p>
-  <span id="auth-user" class="auth-user" aria-live="polite"><% if (typeof user !== 'undefined' && user) { %>Logged in as <%= user.display_name %><% } %></span>
+  <% if (user && user.role === 'user') { %>
+  <button id="profile-open" class="auth-user" type="button" aria-haspopup="dialog" aria-controls="profile-dialog">Logged in as <%= user.display_name %></button>
+  <% } else { %>
+  <span class="auth-user"><% if (typeof user !== 'undefined' && user) { %>Logged in as <%= user.display_name %><% } %></span>
+  <% } %>
   <button id="auth-btn" class="auth-btn" data-logged-in="<%= user ? 'true' : 'false' %>" type="button"><%= user ? 'Log out' : 'Log in' %></button>
   <nav class="tabs" aria-label="Screens">
     <a href="/home">Home</a>
