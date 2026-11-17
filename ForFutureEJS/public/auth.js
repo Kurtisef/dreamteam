@@ -72,6 +72,35 @@
   });
 
   document.getElementById('auth-close')?.addEventListener('click', () => dialog.close());
+  const profileDialog = document.getElementById('profile-dialog');
+  const profileMessage = document.getElementById('profile-msg');
+  const deleteAccountButton = document.getElementById('account-delete');
+  document.getElementById('profile-open')?.addEventListener('click', () => profileDialog?.showModal());
+  document.getElementById('profile-close')?.addEventListener('click', () => profileDialog?.close());
+  deleteAccountButton?.addEventListener('click', async () => {
+    if (!window.confirm('Are you sure you want to permanently delete your account? This cannot be undone.')) return;
+
+    deleteAccountButton.disabled = true;
+    profileMessage.textContent = 'Deleting your account…';
+    profileMessage.className = '';
+    try {
+      const response = await fetch('/account', {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(result?.error || 'Could not delete your account. Please try again.');
+      window.location.replace('/home');
+    } catch (error) {
+      profileMessage.textContent = error instanceof Error
+        ? error.message
+        : 'Could not delete your account. Please try again.';
+      profileMessage.className = 'err';
+      deleteAccountButton.disabled = false;
+    }
+  });
+
   document.getElementById('admin-login-open')?.addEventListener('click', () => {
     dialog.close();
     if (adminMessage) {
