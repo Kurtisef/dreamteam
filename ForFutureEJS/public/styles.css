@@ -1441,6 +1441,8 @@ main {
 
 }
 
+.week-loading,
+.week-closed,
 .week-offline {
   display: none;
   min-height: 360px;
@@ -1451,9 +1453,15 @@ main {
   text-align: center;
 }
 
-#s-off:checked ~ .app .week-offline { display: grid; }
-#s-off:checked ~ .app .week .tips,
-#s-off:checked ~ .app .week .card { display: none; }
+.week.is-loading .week-loading { display: grid; }
+.week.is-closed .week-closed,
+.week.is-offline .week-offline { display: grid; }
+.week.is-loading .tips,
+.week.is-loading > .card,
+.week.is-closed .tips,
+.week.is-closed > .card,
+.week.is-offline .tips,
+.week.is-offline > .card { display: none; }
 
 .tips {
 
@@ -1508,8 +1516,6 @@ main {
   min-width: 480px;
 
 }
-
-.mobile-day-picker { display: none; }
 
 .heat .dh {
 
@@ -1710,22 +1716,6 @@ main {
   .verdict { font-size: 2rem; }
   .bars { gap: 6px; }
   .week .card { padding: 14px; }
-  .mobile-day-picker {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 12px;
-    font-weight: 600;
-  }
-  .mobile-day-picker select {
-    min-width: 140px;
-    padding: 8px 34px 8px 10px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--card);
-    color: var(--ink);
-    font: inherit;
-  }
   .week .scroll { overflow: visible; }
   .week .heat {
     grid-template-columns: 52px minmax(0, 1fr);

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    <Table>
+        <Thead>
+            <tr>
+                <th>User Name</th>
+                <th>Email</th>
+                <th>password</th>
+                <th>action</th>
+            </tr>
+        </Thead>
+        <tbody>
+            <% users.foreach(user => {%>
+                <tr><%=user.user_name%></tr>
+                <tr><%=user.user_email%></tr>
+                <tr><%=user.user_password%></tr>
+                <tr><a class="btn btn-secondary" href="/">edit</a></tr>
+                <tr><a class="btn btn-secondary" href="/">delete</a></tr>
+
+            <%})%>
+        </tbody>
+    </Table>
+</body>
+</html>
