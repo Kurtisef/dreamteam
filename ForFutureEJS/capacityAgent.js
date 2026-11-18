@@ -79,25 +79,12 @@ const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 const geminiResponseSchema = {
   type: Type.OBJECT,
   properties: {
-    capacity_percentage: { type: Type.INTEGER },
     outside_wait_mins: { type: Type.INTEGER },
-    equipment_wait_mins: { type: Type.INTEGER },
-    current_headcount: { type: Type.INTEGER },
   },
-  required: [
-    "capacity_percentage",
-    "outside_wait_mins",
-    "equipment_wait_mins",
-    "current_headcount",
-  ],
+  required: ["outside_wait_mins"],
 };
 
-const expectedMetricKeys = [
-  "capacity_percentage",
-  "outside_wait_mins",
-  "equipment_wait_mins",
-  "current_headcount",
-];
+const expectedMetricKeys = ["outside_wait_mins"];
 const equipmentIntentColumns = [
   "racks",
   "dumbbells",
@@ -147,28 +134,102 @@ function validateMetrics(metrics) {
       throw new Error(`Gemini returned an invalid non-negative integer for ${key}.`);
     }
   }
-  if (metrics.capacity_percentage > 100) {
-    throw new Error("Gemini returned a capacity percentage greater than 100.");
-  }
-
   return metrics;
 }
 
-async function requestRecentTrafficEvents(startAt, endAt) {
+async function requestTrafficEventSummary(capacitySnapshot, waitPeriodBaseline, now) {
   const pageSize = 1000;
-  const events = [];
+  const capacitySnapshotTime = capacitySnapshot?.recorded_at
+    ? parseCapacityTimestamp(capacitySnapshot.recorded_at)
+    : NaN;
+  const waitPeriodStart = waitPeriodBaseline?.recorded_at
+    ? parseCapacityTimestamp(waitPeriodBaseline.recorded_at)
+    : NaN;
+  const baselineHeadcount = waitPeriodBaseline?.current_headcount;
+  let eventReconstructedHeadcount = Number.isInteger(baselineHeadcount)
+    ? Math.max(0, baselineHeadcount)
+    : null;
+  let isAtMaxCapacity = eventReconstructedHeadcount !== null
+    && eventReconstructedHeadcount >= GYM_MAX_CAPACITY;
+  let waitTimesMins = [];
+  let checkIns = 0;
+  let checkOuts = 0;
+  let checkInsAfterSnapshot = 0;
+  let checkOutsAfterSnapshot = 0;
+
   for (let offset = 0; ; offset += pageSize) {
     const { data, error } = await supabase
       .from("traffic_events")
       .select("event_type,wait_time_min,created_at")
-      .gte("created_at", startAt)
-      .lte("created_at", endAt)
       .order("created_at", { ascending: true })
       .range(offset, offset + pageSize - 1);
     if (error) throw error;
     if (!Array.isArray(data)) throw new Error("Supabase returned an invalid traffic event list.");
-    events.push(...data);
-    if (data.length < pageSize) return events;
+
+    for (const event of data) {
+      if (event.event_type !== "in" && event.event_type !== "out") continue;
+      if (event.event_type === "in") checkIns += 1;
+      if (event.event_type === "out") checkOuts += 1;
+
+      const eventTime = new Date(event.created_at).getTime();
+      if (!Number.isFinite(capacitySnapshotTime) || eventTime > capacitySnapshotTime) {
+        if (event.event_type === "in") checkInsAfterSnapshot += 1;
+        if (event.event_type === "out") checkOutsAfterSnapshot += 1;
+      }
+
+      if (
+        eventReconstructedHeadcount === null
+        || !Number.isFinite(waitPeriodStart)
+        || !Number.isFinite(eventTime)
+        || eventTime <= waitPeriodStart
+        || eventTime > now.getTime()
+      ) {
+        continue;
+      }
+
+      const previousHeadcount = eventReconstructedHeadcount;
+      if (event.event_type === "in") eventReconstructedHeadcount += 1;
+      if (event.event_type === "out") {
+        eventReconstructedHeadcount = Math.max(0, eventReconstructedHeadcount - 1);
+      }
+
+      if (previousHeadcount < GYM_MAX_CAPACITY && eventReconstructedHeadcount >= GYM_MAX_CAPACITY) {
+        isAtMaxCapacity = true;
+        waitTimesMins = [];
+      } else if (previousHeadcount >= GYM_MAX_CAPACITY && eventReconstructedHeadcount < GYM_MAX_CAPACITY) {
+        isAtMaxCapacity = false;
+        waitTimesMins = [];
+      }
+
+      if (
+        eventReconstructedHeadcount >= GYM_MAX_CAPACITY
+        && Number.isInteger(event.wait_time_min)
+        && event.wait_time_min >= 0
+      ) {
+        waitTimesMins.push(event.wait_time_min);
+      }
+    }
+
+    if (data.length < pageSize) {
+      const currentHeadcount = Math.min(
+        GYM_MAX_CAPACITY,
+        Math.max(0, checkIns - checkOuts)
+      );
+      return {
+        checkIns,
+        checkOuts,
+        checkInsAfterSnapshot,
+        checkOutsAfterSnapshot,
+        currentHeadcount,
+        outsideWaitPeriod: {
+          baselineRecordedAt: waitPeriodBaseline?.recorded_at || null,
+          baselineHeadcount: baselineHeadcount ?? null,
+          eventReconstructedHeadcount,
+          isAtMaxCapacity,
+          waitTimesMins,
+        },
+      };
+    }
   }
 }
 
@@ -205,15 +266,13 @@ async function requestActivePlannedVisits(now) {
 }
 
 async function extractGymData(now) {
-  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
   const nowIso = now.toISOString();
   const gymLocalNow = formatGymTimestamp(now);
 
-  const [capacitySnapshot, latestBelowCapacitySnapshot, earliestCapacitySnapshot, trafficEvents, activePlannedVisits] = await Promise.all([
+  const [capacitySnapshot, latestBelowCapacitySnapshot, earliestCapacitySnapshot, activePlannedVisits] = await Promise.all([
     requestCapacityLog(),
     requestCapacityLog({ belowMaximum: true }),
     requestCapacityLog({ ascending: true }),
-    requestRecentTrafficEvents(oneHourAgo, nowIso),
     requestActivePlannedVisits(gymLocalNow),
   ]);
 
@@ -221,108 +280,57 @@ async function extractGymData(now) {
     || (earliestCapacitySnapshot?.current_headcount >= GYM_MAX_CAPACITY
       ? earliestCapacitySnapshot
       : null);
-  const waitPeriodStart = waitPeriodBaseline?.recorded_at
-    ? parseCapacityTimestamp(waitPeriodBaseline.recorded_at)
-    : NaN;
-  const waitPeriodEvents = Number.isFinite(waitPeriodStart)
-    ? await requestRecentTrafficEvents(new Date(waitPeriodStart).toISOString(), nowIso)
-    : [];
+  const trafficEventSummary = await requestTrafficEventSummary(
+    capacitySnapshot,
+    waitPeriodBaseline,
+    now
+  );
 
   return {
     now: nowIso,
     capacitySnapshot,
-    trafficEvents,
-    waitPeriodBaseline,
-    waitPeriodEvents,
+    trafficEventSummary,
+    outsideWaitPeriod: trafficEventSummary.outsideWaitPeriod,
     activePlannedVisits,
   };
 }
 
 function summarizeOutsideWaitPeriod(data) {
-  const baseline = data.waitPeriodBaseline;
-  const baselineTime = baseline?.recorded_at
-    ? parseCapacityTimestamp(baseline.recorded_at)
-    : NaN;
-  if (!baseline || !Number.isFinite(baselineTime) || !Number.isInteger(baseline.current_headcount)) {
-    return {
-      baselineRecordedAt: baseline?.recorded_at || null,
-      baselineHeadcount: baseline?.current_headcount ?? null,
-      eventReconstructedHeadcount: null,
-      isAtMaxCapacity: false,
-      waitTimesMins: [],
-    };
-  }
-
-  let headcount = Math.max(0, baseline.current_headcount);
-  let isAtMaxCapacity = headcount >= GYM_MAX_CAPACITY;
-  let waitTimesMins = [];
-
-  for (const event of data.waitPeriodEvents) {
-    const eventTime = new Date(event.created_at).getTime();
-    if (!Number.isFinite(eventTime) || eventTime <= baselineTime) continue;
-
-    const previousHeadcount = headcount;
-    if (event.event_type === "in") headcount += 1;
-    if (event.event_type === "out") headcount = Math.max(0, headcount - 1);
-
-    if (previousHeadcount < GYM_MAX_CAPACITY && headcount >= GYM_MAX_CAPACITY) {
-      isAtMaxCapacity = true;
-      waitTimesMins = [];
-    } else if (previousHeadcount >= GYM_MAX_CAPACITY && headcount < GYM_MAX_CAPACITY) {
-      isAtMaxCapacity = false;
-      waitTimesMins = [];
-    }
-
-    if (
-      headcount >= GYM_MAX_CAPACITY
-      && Number.isInteger(event.wait_time_min)
-      && event.wait_time_min >= 0
-    ) {
-      waitTimesMins.push(event.wait_time_min);
-    }
-  }
-
-  return {
-    baselineRecordedAt: baseline.recorded_at,
-    baselineHeadcount: baseline.current_headcount,
-    eventReconstructedHeadcount: headcount,
-    isAtMaxCapacity,
-    waitTimesMins,
-  };
+  return data.outsideWaitPeriod;
 }
 
 function summarizeGymData(data) {
-  const baselineTime = data.capacitySnapshot?.recorded_at
-    ? parseCapacityTimestamp(data.capacitySnapshot.recorded_at)
-    : null;
-  const eventsAfterSnapshot = data.trafficEvents.filter((event) => (
-    !Number.isFinite(baselineTime) || new Date(event.created_at).getTime() > baselineTime
-  ));
-  const countEvents = (events) => ({
-    check_ins: events.filter((event) => event.event_type === "in").length,
-    check_outs: events.filter((event) => event.event_type === "out").length,
-  });
-  const equipmentIntentCounts = Object.fromEntries(equipmentIntentColumns.map((column) => [
-    column,
-    data.activePlannedVisits.filter((visit) => visit[column] === true).length,
-  ]));
+  const outsideWaitPeriod = summarizeOutsideWaitPeriod(data);
+  const waitTimes = outsideWaitPeriod.waitTimesMins.slice().sort((a, b) => a - b);
+  const middle = Math.floor(waitTimes.length / 2);
+  const waitTimeSamples = {
+    count: waitTimes.length,
+    average: waitTimes.length
+      ? waitTimes.reduce((total, value) => total + value, 0) / waitTimes.length
+      : null,
+    median: waitTimes.length
+      ? waitTimes.length % 2
+        ? waitTimes[middle]
+        : (waitTimes[middle - 1] + waitTimes[middle]) / 2
+      : null,
+    minimum: waitTimes.length ? waitTimes[0] : null,
+    maximum: waitTimes.length ? waitTimes[waitTimes.length - 1] : null,
+  };
 
   return {
     now: data.now,
-    capacitySnapshot: data.capacitySnapshot
-      ? {
-          current_headcount: data.capacitySnapshot.current_headcount,
-          capacity_percentage: data.capacitySnapshot.capacity_percentage,
-        }
-      : null,
-    trafficLast60Minutes: {
-      ...countEvents(data.trafficEvents),
-      eventsAfterCapacitySnapshot: countEvents(eventsAfterSnapshot),
+    currentHeadcount: data.trafficEventSummary.currentHeadcount,
+    trafficEventHistory: {
+      check_ins: data.trafficEventSummary.checkIns,
+      check_outs: data.trafficEventSummary.checkOuts,
+      eventsAfterCapacitySnapshot: {
+        check_ins: data.trafficEventSummary.checkInsAfterSnapshot,
+        check_outs: data.trafficEventSummary.checkOutsAfterSnapshot,
+      },
     },
-    outsideWaitPeriod: summarizeOutsideWaitPeriod(data),
-    activePlannedVisits: {
-      count: data.activePlannedVisits.length,
-      equipmentIntentCounts,
+    outsideWaitPeriod: {
+      isAtMaxCapacity: outsideWaitPeriod.isAtMaxCapacity,
+      waitTimeSamples,
     },
   };
 }
@@ -331,15 +339,10 @@ function createPrompt(data) {
   const summary = summarizeGymData(data);
   summary.maximumCapacity = GYM_MAX_CAPACITY;
   return [
-    "Estimate the gym's current status using only the supplied data.",
-    "Return a single JSON object with exactly these four keys: capacity_percentage, outside_wait_mins, equipment_wait_mins, current_headcount.",
-    "Every value must be a non-negative integer; capacity_percentage must be between 0 and 100.",
-    "Use the most recent capacity snapshot as the headcount baseline. Adjust it by eventsAfterCapacitySnapshot.check_ins minus eventsAfterCapacitySnapshot.check_outs. If there is no snapshot, use the available check-ins and check-outs as the best estimate.",
-    "If the snapshot exists but current_headcount is null, use the available post-snapshot events to estimate from zero and never return a negative count.",
-    "Estimate outside_wait_mins only from outsideWaitPeriod.waitTimesMins. These samples have already been filtered to the latest uninterrupted period at maximum capacity; never use older or other traffic-event waits. If outsideWaitPeriod.isAtMaxCapacity is false or the sample list is empty, return 0.",
-    "Set equipment_wait_mins to 0; the application calculates this metric deterministically from the current headcount and active planned equipment intent.",
-    "Planned visits indicate intent, not confirmed arrivals; do not add them to current_headcount.",
-    "Calculate capacity_percentage as current_headcount divided by maximumCapacity times 100, rounded to the nearest whole number and capped at 100.",
+    "Estimate only the outside wait time from the supplied data.",
+    "Return a single JSON object with exactly this key: outside_wait_mins. Its value must be a non-negative integer.",
+    "The application has computed currentHeadcount from every in and out event in the traffic event history. Do not estimate or alter currentHeadcount, capacity_percentage, or equipment_wait_mins.",
+    "Estimate outside_wait_mins only from outsideWaitPeriod.waitTimeSamples, which summarizes samples from the latest uninterrupted period at maximum capacity. Return 0 if outsideWaitPeriod.isAtMaxCapacity is false or the sample count is zero; otherwise round the estimated wait to the nearest whole minute.",
     "The input contains aggregate counts only. Do not infer individual identities or claim unsupported precision.",
     "Data:",
     JSON.stringify(summary),
@@ -369,16 +372,7 @@ function calculateEquipmentWaitMinutes(currentHeadcount, activePlannedVisits) {
 }
 
 function estimateMetricsFromAvailableData(data) {
-  const summary = summarizeGymData(data);
-  const baselineHeadcount = Number.isInteger(summary.capacitySnapshot?.current_headcount)
-    ? summary.capacitySnapshot.current_headcount
-    : 0;
-  const eventDelta = summary.trafficLast60Minutes.eventsAfterCapacitySnapshot.check_ins
-    - summary.trafficLast60Minutes.eventsAfterCapacitySnapshot.check_outs;
-  const currentHeadcount = Math.min(
-    GYM_MAX_CAPACITY,
-    Math.max(0, baselineHeadcount + eventDelta)
-  );
+  const currentHeadcount = data.trafficEventSummary.currentHeadcount;
   const outsideWaitPeriod = summarizeOutsideWaitPeriod(data);
   const outsideWaitMins = currentHeadcount >= GYM_MAX_CAPACITY
     && outsideWaitPeriod.isAtMaxCapacity
@@ -404,52 +398,55 @@ function estimateMetricsFromAvailableData(data) {
 }
 
 async function transformGymData(data) {
-  let response;
-  try {
-    response = await genAI.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: createPrompt(data),
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: geminiResponseSchema,
-      },
-    });
-  } catch (error) {
-    console.warn(
-      "Gemini capacity estimate failed; saving a traffic-event-based estimate instead:",
-      error
-    );
-    return estimateMetricsFromAvailableData(data);
-  }
-
-  if (typeof response.text !== "string" || response.text.trim() === "") {
-    throw new Error("Gemini returned an empty response.");
-  }
-
-  let parsed;
-  try {
-    parsed = JSON.parse(response.text);
-  } catch (error) {
-    throw new Error("Gemini returned invalid JSON.", { cause: error });
-  }
-  const metrics = validateMetrics(parsed);
-  metrics.capacity_percentage = Math.min(
-    100,
-    Math.round((metrics.current_headcount / GYM_MAX_CAPACITY) * 100)
-  );
+  const currentHeadcount = data.trafficEventSummary.currentHeadcount;
   const outsideWaitPeriod = summarizeOutsideWaitPeriod(data);
+  let outsideWaitMins = 0;
+
   if (
-    metrics.current_headcount < GYM_MAX_CAPACITY
-    || !outsideWaitPeriod.isAtMaxCapacity
-    || outsideWaitPeriod.waitTimesMins.length === 0
+    currentHeadcount >= GYM_MAX_CAPACITY
+    && outsideWaitPeriod.isAtMaxCapacity
+    && outsideWaitPeriod.waitTimesMins.length > 0
   ) {
-    metrics.outside_wait_mins = 0;
+    try {
+      const response = await genAI.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: createPrompt(data),
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: geminiResponseSchema,
+        },
+      });
+      if (typeof response.text !== "string" || response.text.trim() === "") {
+        throw new Error("Gemini returned an empty response.");
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(response.text);
+      } catch (error) {
+        throw new Error("Gemini returned invalid JSON.", { cause: error });
+      }
+      outsideWaitMins = validateMetrics(parsed).outside_wait_mins;
+    } catch (error) {
+      console.warn(
+        "Gemini outside-wait estimate failed; using the average of valid wait samples instead:",
+        error
+      );
+      outsideWaitMins = estimateMetricsFromAvailableData(data).outside_wait_mins;
+    }
   }
-  metrics.equipment_wait_mins = calculateEquipmentWaitMinutes(
-    metrics.current_headcount,
-    data.activePlannedVisits
-  );
-  return metrics;
+
+  return {
+    capacity_percentage: Math.min(
+      100,
+      Math.round((currentHeadcount / GYM_MAX_CAPACITY) * 100)
+    ),
+    outside_wait_mins: outsideWaitMins,
+    equipment_wait_mins: calculateEquipmentWaitMinutes(
+      currentHeadcount,
+      data.activePlannedVisits
+    ),
+    current_headcount: currentHeadcount,
+  };
 }
 
 async function loadCapacityLog(metrics, recordedAt) {
