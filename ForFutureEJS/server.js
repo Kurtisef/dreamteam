@@ -2148,10 +2148,11 @@ app.get('/admin/schedule', (req, res) => {
 });
 
 
-app.get('/403', (req,res) =>{
+app.get('/admin/greg', async (req, res) => {
   if (!req.profile) return res.redirect('/home?adminLogin=required');
   if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
-  return res.render('admin', { user: req.profile, currentPath: req.path });
+  const users = await requestProfiles();
+  return res.render('greg', { user: req.profile, currentPath: req.path, users: users });
 });
 
 

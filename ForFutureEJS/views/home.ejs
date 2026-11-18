@@ -20,7 +20,11 @@
   <nav class="tabs" aria-label="Screens">
     <a href="/home" aria-current="page">Home</a>
     <% if (user && user.role === 'admin') { %>
-    <a href="/admin">Front Desk</a><a href="/admin/schedule">Schedule</a><a href="/admin/okrs">OKRs</a>
+    <a href="/admin">Front Desk</a>
+    <a href="/admin/schedule">Schedule</a>
+    <a href="/admin/okrs">OKRs</a>
+    <a href="/admin/greg">Greg</a>
+
     <% } else { %>
     <a href="/live">Live feed</a><a href="/week">Week view</a>
     <a href="/plan">Plan visit</a>
