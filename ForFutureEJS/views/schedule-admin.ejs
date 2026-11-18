@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Schedule | BYU Gym Planner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Public+Sans:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+  <div class="app">
+    <header class="top"><div class="in">
+      <h1>BYU Gym Planner</h1>
+      <p>Manage upcoming gym schedule changes.</p>
+      <span class="auth-user">Logged in as <%= user.display_name %></span>
+      <form action="/logout" method="post"><input type="hidden" name="return_to" value="/home"><button type="submit" class="auth-btn">Log out</button></form>
+      <nav class="tabs" aria-label="Screens">
+        <a href="/home">Home</a><a href="/admin">Front Desk</a>
+        <a href="/admin/schedule" aria-current="page">Schedule</a><a href="/admin/okrs">OKRs</a>
+      </nav>
+    </div></header>
+    <main class="admin schedule-page" data-gym-time-zone="<%= gymTimeZone %>">
+      <h2>Schedule changes</h2>
+      <p class="lead">Add, edit, or remove future exceptions. Changes appear on Home and Week view.</p>
+      <section class="card schedule-admin" aria-labelledby="new-exception-title">
+        <h3 id="new-exception-title">Add a schedule change</h3>
+        <form id="new-exception-form" class="exception-create-form">
+          <label class="exception-field">Date<input id="exception-date" type="date" required></label>
+          <label class="exception-field">Opens<input id="exception-start" type="time"></label>
+          <label class="exception-field">Closes<input id="exception-end" type="time"></label>
+          <label class="exception-field">Reason<input id="exception-reason" type="text" maxlength="240" placeholder="Optional"></label>
+          <label class="exception-closed-toggle"><input id="exception-closed" type="checkbox">Closed all day</label>
+          <button id="exception-create-submit" type="submit" class="btn-primary">Add schedule change</button>
+        </form>
+        <p id="exception-create-msg" role="status" aria-live="polite"></p>
+      </section>
+      <section class="card schedule-admin" aria-labelledby="future-exceptions-title">
+        <h3 id="future-exceptions-title">All future schedule changes</h3>
+        <p id="schedule-admin-msg" role="status" aria-live="polite">Loading future schedule changes…</p>
+        <div id="admin-exceptions-list"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/admin-exceptions.js" defer></script>
+</body>
+</html>

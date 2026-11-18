@@ -28,7 +28,10 @@ const gymDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
 
 const SESSION_COOKIE = 'gym_profile_session';
 const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+const APP_OPEN_INTERVAL_MS = 30 * 60 * 1000;
 const profileSessions = new Map();
+const appOpenLastRecordedAt = new Map();
+const pendingAppOpenInserts = new Map();
 
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
@@ -116,28 +119,42 @@ const plannedVisitSelect = [
   'weight_machines',
   'cardio_machines',
 ].join(',');
+const plannedVisitHistorySelect = `${plannedVisitSelect},did_attend,attendance_responded_at`;
 
-async function requestPlannedVisits({ profileId, method = 'GET', date, visitId, beforeArrival, body } = {}) {
+
+async function requestPlannedVisits({
+  profileId,
+  method = 'GET',
+  date,
+  visitId,
+  afterArrival,
+  beforeArrival,
+  beforeExit,
+  includeAttendance = false,
+  newestFirst = false,
+  body,
+} = {}) {
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     throw new Error('Planned visit database access is not configured.');
   }
 
   const url = new URL(`${supabaseUrl}/rest/v1/planned_visits`);
-  url.searchParams.set('select', plannedVisitSelect);
+  url.searchParams.set('select', includeAttendance ? plannedVisitHistorySelect : plannedVisitSelect);
   if (profileId !== undefined) url.searchParams.set('profile_id', `eq.${profileId}`);
   if (visitId !== undefined) url.searchParams.set('planned_visit_id', `eq.${visitId}`);
-  if (beforeArrival !== undefined) {
-    url.searchParams.set('intended_arrival', `lt.${beforeArrival}`);
-  }
+  const filters = [];
+  if (afterArrival !== undefined) filters.push(`intended_arrival.gte.${afterArrival}`);
+  if (beforeArrival !== undefined) filters.push(`intended_arrival.lt.${beforeArrival}`);
+  if (beforeExit !== undefined) filters.push(`exit_time.lte.${beforeExit}`);
   if (date) {
     const nextDate = new Date(`${date}T00:00:00Z`);
     nextDate.setUTCDate(nextDate.getUTCDate() + 1);
     const nextDateString = nextDate.toISOString().slice(0, 10);
-    url.searchParams.set(
-      'and',
-      `(intended_arrival.gte.${date}T00:00:00,intended_arrival.lt.${nextDateString}T00:00:00)`
-    );
+    filters.push(`intended_arrival.gte.${date}T00:00:00`);
+    filters.push(`intended_arrival.lt.${nextDateString}T00:00:00`);
   }
+  if (filters.length) url.searchParams.set('and', `(${filters.join(',')})`);
+  if (newestFirst) url.searchParams.set('order', 'intended_arrival.desc');
 
   const headers = {
     apikey: supabaseServiceRoleKey,
@@ -165,6 +182,302 @@ async function requestPlannedVisits({ profileId, method = 'GET', date, visitId, 
     throw new Error(message);
   }
   return result;
+}
+
+async function requestExpiredPlannedVisitCleanup(beforeArrival) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Planned visit database access is not configured.');
+  }
+
+  const response = await fetch(
+    `${supabaseUrl}/rest/v1/rpc/expire_planned_visits_and_update_metrics`,
+    {
+      method: 'POST',
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ p_before_arrival: beforeArrival }),
+    }
+  );
+  const responseText = await response.text();
+  let result;
+  try {
+    result = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    result = null;
+  }
+
+  if (!response.ok) {
+    const message = result?.message || result?.hint || `Supabase request failed (${response.status}).`;
+    throw new Error(message);
+  }
+  if (!Number.isInteger(result) || result < 0) {
+    throw new Error('Supabase returned an invalid expired reservation count.');
+  }
+  return result;
+}
+
+async function requestAdminOkrRows(table, select, filters = {}) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('OKR data access is not configured.');
+  }
+  if (!['profiles', 'app_opens', 'planned_visits', 'capacity_logs'].includes(table)) {
+    throw new Error('The requested OKR data source is not allowed.');
+  }
+
+  const rows = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const url = new URL(`${supabaseUrl}/rest/v1/${table}`);
+    url.searchParams.set('select', select);
+    for (const [key, value] of Object.entries(filters)) {
+      url.searchParams.set(key, value);
+    }
+
+    const response = await fetch(url, {
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Range-Unit': 'items',
+        Range: `${offset}-${offset + pageSize - 1}`,
+      },
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      const error = new Error(
+        result?.message || result?.hint || `Supabase ${table} request failed (${response.status}).`
+      );
+      error.code = result?.code;
+      error.table = table;
+      throw error;
+    }
+    if (!Array.isArray(result)) {
+      throw new Error(`Supabase returned an invalid ${table} list.`);
+    }
+    rows.push(...result);
+    if (result.length < pageSize) return rows;
+  }
+}
+
+function getOkrWeekKeys(currentWeek) {
+  return Array.from({ length: 8 }, (_, index) => shiftDateKey(currentWeek, (index - 7) * 7));
+}
+
+function groupByWeek(rows, getDateKey) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const dateKey = getDateKey(row);
+    if (!dateKey) continue;
+    const week = weekStartKey(dateKey);
+    if (!grouped.has(week)) grouped.set(week, []);
+    grouped.get(week).push(row);
+  }
+  return grouped;
+}
+
+async function requestAdminOkrMetrics() {
+  const now = new Date();
+  const currentWeek = weekStartKey(dateKeyFromParts(mountainDateParts(now)));
+  const firstWeek = shiftDateKey(currentWeek, -49);
+  const startAt = new Date(mountainWallTime(firstWeek, 0)).toISOString();
+  const endAt = now.toISOString();
+  const [profiles, appOpens, plannedVisits, capacityLogs] = await Promise.all([
+    requestAdminOkrRows('profiles', 'profile_id,display_name'),
+    requestAdminOkrRows('app_opens', 'profile_id,opened_at', {
+      opened_at: `gte.${startAt}`,
+      and: `(opened_at.lt.${endAt})`,
+      order: 'opened_at.asc',
+    }),
+    requestAdminOkrRows('planned_visits', 'profile_id'),
+    requestAdminOkrRows(
+      'capacity_logs',
+      'recorded_at,capacity_percentage,outside_wait_mins,equipment_wait_mins',
+      {
+      recorded_at: `gte.${startAt}`,
+      and: `(recorded_at.lt.${endAt})`,
+      order: 'recorded_at.asc',
+      }
+    ),
+  ]);
+  const weekKeys = getOkrWeekKeys(currentWeek);
+  const profileIds = new Set(profiles.map((profile) => profile.profile_id).filter(Boolean).map(String));
+  const reservationsByProfile = new Map(
+    profiles.filter((profile) => profile.profile_id).map((profile) => [String(profile.profile_id), {
+      profile_id: profile.profile_id,
+      display_name: profile.display_name || '',
+      total_planned_visits: 0,
+    }])
+  );
+  for (const visit of plannedVisits) {
+    if (visit.profile_id === null || visit.profile_id === undefined) continue;
+    const profileId = String(visit.profile_id);
+    if (!reservationsByProfile.has(profileId)) {
+      reservationsByProfile.set(profileId, {
+        profile_id: profileId,
+        display_name: '',
+        total_planned_visits: 0,
+      });
+    }
+    reservationsByProfile.get(profileId).total_planned_visits += 1;
+  }
+  const plannedVisitsByProfile = Array.from(reservationsByProfile.values())
+    .sort((a, b) => b.total_planned_visits - a.total_planned_visits
+      || a.display_name.localeCompare(b.display_name)
+      || a.profile_id.localeCompare(b.profile_id));
+  const appOpensByWeek = groupByWeek(appOpens, (open) => {
+    if (typeof open.opened_at !== 'string') return null;
+    return dateKeyFromParts(mountainDateParts(new Date(open.opened_at)));
+  });
+  const weeklyAppOpens = weekKeys.map((week) => {
+    const openCount = (appOpensByWeek.get(week) || []).length;
+    return {
+      week_start: week,
+      open_count: openCount,
+      average_opens_per_profile: profileIds.size
+        ? Math.round((openCount / profileIds.size) * 100) / 100
+        : null,
+    };
+  });
+  const waitTimesByWeek = new Map();
+  const hourlyCapacityByDay = new Map();
+  for (const record of capacityLogs) {
+    if (typeof record.recorded_at !== 'string') continue;
+    const parts = mountainDateParts(new Date(record.recorded_at));
+    const dateKey = dateKeyFromParts(parts);
+    const week = weekStartKey(dateKey);
+    if (!waitTimesByWeek.has(week)) {
+      waitTimesByWeek.set(week, { outside: [], equipment: [] });
+    }
+    const weeklyWaits = waitTimesByWeek.get(week);
+    for (const [field, values] of [
+      ['outside_wait_mins', weeklyWaits.outside],
+      ['equipment_wait_mins', weeklyWaits.equipment],
+    ]) {
+      const minutes = record[field];
+      if (Number.isFinite(minutes) && minutes >= 0) values.push(minutes);
+    }
+
+    const fullness = Number(record.capacity_percentage);
+    if (
+      record.capacity_percentage === null
+      || !Number.isFinite(fullness)
+      || fullness < 0
+      || fullness > 100
+    ) continue;
+    const hour = Number(parts.hour);
+    if (parts.weekday === 'Sun' || hour < 6 || hour > 21) continue;
+    if (!hourlyCapacityByDay.has(dateKey)) hourlyCapacityByDay.set(dateKey, new Map());
+    const hourlyAverages = hourlyCapacityByDay.get(dateKey);
+    if (!hourlyAverages.has(hour)) hourlyAverages.set(hour, []);
+    hourlyAverages.get(hour).push(fullness);
+  }
+
+  const capacityValuesByWeek = new Map();
+  for (const [dateKey, hours] of hourlyCapacityByDay) {
+    const week = weekStartKey(dateKey);
+    if (!capacityValuesByWeek.has(week)) capacityValuesByWeek.set(week, []);
+    for (const readings of hours.values()) {
+      capacityValuesByWeek.get(week).push(
+        readings.reduce((sum, value) => sum + value, 0) / readings.length
+      );
+    }
+  }
+
+  const averageWait = (records) => records.length
+    ? Math.round(records.reduce((sum, value) => sum + value, 0) / records.length * 100) / 100
+    : null;
+  const weeklyWaitTimes = weekKeys.map((week) => {
+    const records = waitTimesByWeek.get(week) || { outside: [], equipment: [] };
+    return {
+      week_start: week,
+      average_outside_wait_minutes: averageWait(records.outside),
+      outside_sample_count: records.outside.length,
+      average_equipment_wait_minutes: averageWait(records.equipment),
+      equipment_sample_count: records.equipment.length,
+    };
+  });
+  const weeklyCapacityVariation = weekKeys.map((week) => {
+    const values = capacityValuesByWeek.get(week) || [];
+    const mean = values.length
+      ? values.reduce((sum, value) => sum + value, 0) / values.length
+      : 0;
+    const variance = values.length
+      ? values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / values.length
+      : 0;
+    return {
+      week_start: week,
+      capacity_percentage_stddev: values.length
+        ? Math.round(Math.sqrt(variance) * 100) / 100
+        : null,
+      sampled_hours: values.length,
+    };
+  });
+
+  const profileCount = profiles.filter((profile) => profile.profile_id).length;
+  const appOpenCount = appOpens.length;
+  return {
+    profiles_count: profileCount,
+    app_opens_count: appOpenCount,
+    app_opens_per_profile: profileCount
+      ? Math.round((appOpenCount / profileCount / weekKeys.length) * 100) / 100
+      : null,
+    planned_visits_count: plannedVisits.length,
+    planned_visits_by_profile: plannedVisitsByProfile,
+    app_opens_weekly: weeklyAppOpens,
+    wait_times_weekly: weeklyWaitTimes,
+    capacity_variation_weekly: weeklyCapacityVariation,
+  };
+}
+
+async function insertAppOpen(profileId) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('App-open tracking is not configured.');
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/app_opens`, {
+    method: 'POST',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify({
+      profile_id: profileId,
+      opened_at: new Date().toISOString(),
+    }),
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => null);
+    throw new Error(result?.message || result?.hint || `Supabase app-open insert failed (${response.status}).`);
+  }
+}
+
+async function insertAppOpenIfDue(profileId) {
+  const profileKey = String(profileId);
+  const lastRecordedAt = appOpenLastRecordedAt.get(profileKey);
+  if (lastRecordedAt && Date.now() - lastRecordedAt < APP_OPEN_INTERVAL_MS) return false;
+
+  const pendingInsert = pendingAppOpenInserts.get(profileKey);
+  if (pendingInsert) {
+    await pendingInsert;
+    return false;
+  }
+
+  const insert = insertAppOpen(profileId).then(() => {
+    appOpenLastRecordedAt.set(profileKey, Date.now());
+    return true;
+  });
+  pendingAppOpenInserts.set(profileKey, insert);
+  try {
+    return await insert;
+  } finally {
+    if (pendingAppOpenInserts.get(profileKey) === insert) {
+      pendingAppOpenInserts.delete(profileKey);
+    }
+  }
 }
 
 async function requestAtomicPlannedVisit(body) {
@@ -230,10 +543,19 @@ async function deleteOldPlannedVisits() {
     .join(':');
   const cutoff = `${cutoffDay}T${cutoffTime}`;
 
-  return requestPlannedVisits({
-    method: 'DELETE',
-    beforeArrival: cutoff,
-  });
+  return requestExpiredPlannedVisitCleanup(cutoff);
+}
+
+function getRecentCompletedVisitWindow() {
+  const gymNow = getGymClockParts();
+  const beforeArrival = `${gymNow.date}T${String(gymNow.hour).padStart(2, '0')}:${String(gymNow.minute).padStart(2, '0')}:${String(gymNow.second).padStart(2, '0')}`;
+  const cutoffDate = new Date(`${gymNow.date}T00:00:00Z`);
+  cutoffDate.setUTCHours(gymNow.hour, gymNow.minute, gymNow.second, 0);
+  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 7);
+  return {
+    afterArrival: cutoffDate.toISOString().slice(0, 19),
+    beforeArrival,
+  };
 }
 
 function parsePlannedVisitInput(body) {
@@ -315,6 +637,39 @@ function parseScheduleTime(value) {
   const match = value.match(/^([01]\d|2[0-3]):([0-5]\d)(?::[0-5]\d(?:\.\d+)?)?$/);
   if (!match) return null;
   return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function scheduleExceptionRangesOverlap(candidate, existingRows) {
+  const rangeFor = (item) => {
+    if (item.is_closed_all_day === true) return { start: 0, end: 1440 };
+    const start = parseScheduleTime(item.start_time);
+    let end = parseScheduleTime(item.end_time);
+    if (start === null || end === null) return null;
+    if (end <= start) end += 1440;
+    return { start, end };
+  };
+  const current = rangeFor(candidate);
+  if (!current) return false;
+  return existingRows.some((item) => {
+    const other = rangeFor(item);
+    if (!other) return false;
+    return [-1440, 0, 1440].some((offset) => (
+      current.start < other.end + offset && other.start + offset < current.end
+    ));
+  });
+}
+
+async function requestScheduleExceptionsForDate(date) {
+  const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+  url.searchParams.set('select', 'schedule_id,exception_date,start_time,end_time,is_closed_all_day');
+  url.searchParams.set('exception_date', `eq.${date}`);
+  const response = await fetch(url, { headers: {
+    apikey: supabaseServiceRoleKey,
+    Authorization: `Bearer ${supabaseServiceRoleKey}`,
+  } });
+  const rows = await response.json();
+  if (!response.ok || !Array.isArray(rows)) throw new Error('Could not check for overlapping schedule changes.');
+  return rows;
 }
 
 function reservationFitsSchedule(startMinute, endMinute, scheduleRows) {
@@ -679,28 +1034,16 @@ async function insertTrafficEvent({ deskId, eventType, waitTimeMin }) {
   }
 }
 
-async function requestTodayTrafficEvents() {
-  const now = new Date();
-  const parts = mountainDateParts(now);
-  const today = dateKeyFromParts(parts);
-  const events = await readTrafficEventsSince(new Date(mountainWallTime(today, 6)));
-  const todayEvents = events.filter((event) => {
-    if (!event.created_at || !['in', 'out'].includes(event.event_type)) return false;
-    const eventParts = mountainDateParts(new Date(event.created_at));
-    return dateKeyFromParts(eventParts) === today
-      && Number(eventParts.hour) >= 6
-      && Number(eventParts.hour) < 22;
-  });
+async function requestTrafficEvents() {
+  const events = await readTrafficEventsSince();
   let insideCount = 0;
-  for (const event of todayEvents) {
-    insideCount = Math.max(
-      0,
-      Math.min(MAX_GYM_CAPACITY, insideCount + (event.event_type === 'in' ? 1 : -1))
-    );
+  for (const event of events) {
+    if (event.event_type === 'in') insideCount += 1;
+    if (event.event_type === 'out') insideCount -= 1;
   }
   return {
-    events: todayEvents.reverse(),
-    insideCount,
+    events: events.reverse(),
+    insideCount: Math.max(0, Math.min(MAX_GYM_CAPACITY, insideCount)),
   };
 }
 
@@ -791,7 +1134,7 @@ function mountainWallTime(dateKey, hour) {
   return timestamp;
 }
 
-async function readTrafficEventsSince(since) {
+async function readTrafficEventsSince(since = null) {
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     throw new Error('Capacity history is not configured.');
   }
@@ -801,7 +1144,7 @@ async function readTrafficEventsSince(since) {
   for (let offset = 0; ; offset += pageSize) {
     const url = new URL(`${supabaseUrl}/rest/v1/traffic_events`);
     url.searchParams.set('select', 'event_type,wait_time_min,created_at');
-    url.searchParams.set('created_at', `gte.${since.toISOString()}`);
+    if (since) url.searchParams.set('created_at', `gte.${since.toISOString()}`);
     url.searchParams.set('order', 'created_at.asc');
     url.searchParams.set('limit', String(pageSize));
     const response = await fetch(url, {
@@ -850,21 +1193,18 @@ async function readCapacityReadingsSince(since) {
   return rows;
 }
 
-async function getCurrentOccupancy(dateKey = dateKeyFromParts(mountainDateParts(new Date()))) {
-  const opening = mountainWallTime(dateKey, 6);
-  const events = await readTrafficEventsSince(new Date(opening));
+async function getCurrentOccupancy() {
+  const events = await readTrafficEventsSince();
   let count = 0;
   for (const event of events) {
-    if (!event.created_at || !['in', 'out'].includes(event.event_type)) continue;
-    const parts = mountainDateParts(new Date(event.created_at));
-    if (dateKeyFromParts(parts) !== dateKey || Number(parts.hour) < 6 || Number(parts.hour) >= 22) continue;
-    count = Math.max(0, Math.min(MAX_GYM_CAPACITY, count + (event.event_type === 'in' ? 1 : -1)));
+    if (event.event_type === 'in') count += 1;
+    if (event.event_type === 'out') count -= 1;
   }
-  return count;
+  return Math.max(0, Math.min(MAX_GYM_CAPACITY, count));
 }
 
 async function insertCapacitySnapshot(sampledAt) {
-  const occupancy = await getCurrentOccupancy(dateKeyFromParts(mountainDateParts(sampledAt)));
+  const occupancy = await getCurrentOccupancy();
   const latestUrl = new URL(`${supabaseUrl}/rest/v1/capacity_logs`);
   latestUrl.searchParams.set('select', 'outside_wait_mins,equipment_wait_mins');
   latestUrl.searchParams.set('order', 'recorded_at.desc');
@@ -1080,6 +1420,66 @@ app.get('/plan/visits', async (req, res) => {
   }
 });
 
+app.get('/plan/history', async (req, res) => {
+  const profile = requireVisitProfile(req, res);
+  if (!profile) return;
+  const { afterArrival, beforeArrival } = getRecentCompletedVisitWindow();
+
+  try {
+    const visits = await requestPlannedVisits({
+      profileId: profile.profile_id,
+      afterArrival,
+      beforeArrival,
+      beforeExit: beforeArrival,
+      includeAttendance: true,
+      newestFirst: true,
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ visits: Array.isArray(visits) ? visits : [] });
+  } catch (error) {
+    console.error('Recent planned visits fetch failed:', error);
+    return res.status(500).json({ error: 'Could not load recent visits.' });
+  }
+});
+
+app.patch('/plan/visits/:visitId/attendance', async (req, res) => {
+  const profile = requireVisitProfile(req, res);
+  if (!profile) return;
+
+  const visitId = req.params.visitId;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(visitId)) {
+    return res.status(400).json({ error: 'Invalid planned visit ID.' });
+  }
+  if (typeof req.body?.did_attend !== 'boolean') {
+    return res.status(400).json({ error: 'Choose kept or not kept.' });
+  }
+
+  const { afterArrival, beforeArrival } = getRecentCompletedVisitWindow();
+  try {
+    const updated = await requestPlannedVisits({
+      profileId: profile.profile_id,
+      visitId,
+      method: 'PATCH',
+      afterArrival,
+      beforeArrival,
+      beforeExit: beforeArrival,
+      includeAttendance: true,
+      body: {
+        did_attend: req.body.did_attend,
+        attendance_responded_at: new Date().toISOString(),
+      },
+    });
+    if (!Array.isArray(updated) || !updated[0]) {
+      return res.status(404).json({ error: 'That completed visit was not found in the last 7 days.' });
+    }
+    res.set('Cache-Control', 'no-store');
+    return res.json({ visit: updated[0] });
+  } catch (error) {
+    console.error('Planned visit attendance save failed:', error);
+    return res.status(500).json({ error: 'Could not save your attendance response.' });
+  }
+});
+
 app.post('/plan/visits', async (req, res) => {
   const profile = requireVisitProfile(req, res);
   if (!profile) return;
@@ -1243,6 +1643,14 @@ app.post('/login', async (req, res) => {
       email: profile.email,
       role: 'user',
     };
+    if (user.profile_id) {
+      try {
+        await insertAppOpen(user.profile_id);
+        appOpenLastRecordedAt.set(String(user.profile_id), Date.now());
+      } catch (error) {
+        console.error('App open insert after login failed:', error);
+      }
+    }
     profileSessions.set(sessionId, { profile: user, expiresAt: Date.now() + SESSION_LIFETIME_MS });
     setSessionCookie(res, sessionId);
     return res.redirect(returnPath);
@@ -1328,16 +1736,51 @@ app.post('/admin/events', async (req, res) => {
   }
 });
 
+app.post('/app/open', async (req, res) => {
+  if (!req.profile || req.profile.role !== 'user') {
+    return res.status(401).json({ error: 'Log in to record an app open.' });
+  }
+  if (!req.profile.profile_id) {
+    return res.status(403).json({ error: 'Your profile is missing its database ID. Please log in again.' });
+  }
+
+  try {
+    const recorded = await insertAppOpenIfDue(req.profile.profile_id);
+    return res.status(recorded ? 201 : 200).json({ ok: true, recorded });
+  } catch (error) {
+    console.error('App open insert failed:', error);
+    return res.status(500).json({ error: 'Could not record this app open.' });
+  }
+});
+
 app.get('/admin/events', async (req, res) => {
   if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
   if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
 
   try {
     res.set('Cache-Control', 'no-store');
-    return res.json(await requestTodayTrafficEvents());
+    return res.json(await requestTrafficEvents());
   } catch (error) {
     console.error('Traffic events fetch failed:', error);
     return res.status(503).json({ error: `Could not load gym activity: ${error.message}` });
+  }
+});
+
+app.get('/admin/okr-data', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+
+  try {
+    res.set('Cache-Control', 'no-store');
+    return res.json(await requestAdminOkrMetrics());
+  } catch (error) {
+    console.error('Admin OKR metrics fetch failed:', error);
+    if (error.code === 'PGRST205' || error.code === '42P01') {
+      return res.status(503).json({
+        error: `The Supabase ${error.table || 'OKR data'} table is unavailable. Check its name and service-role access.`,
+      });
+    }
+    return res.status(503).json({ error: `Could not load OKR metrics: ${error.message}` });
   }
 });
 
@@ -1377,6 +1820,232 @@ app.get('/operating-hours', async (req, res) => {
   } catch (error) {
     console.error('Operating hours fetch failed:', error);
     return res.status(503).json({ error: 'Could not load operating hours.' });
+  }
+});
+
+app.get('/schedule-exceptions', async (req, res) => {
+  const startDate = typeof req.query.start_date === 'string' ? req.query.start_date : '';
+  const endDate = typeof req.query.end_date === 'string' ? req.query.end_date : '';
+  const validDate = (date) => /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+    && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  if (!validDate(startDate) || !validDate(endDate) || startDate > endDate) {
+    return res.status(400).json({ error: 'Provide a valid start_date and end_date range.' });
+  }
+  try {
+    const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+    url.searchParams.set('select', 'exception_date,start_time,end_time,reason,is_closed_all_day');
+    url.searchParams.set('exception_date', `gte.${startDate}`);
+    url.searchParams.set('and', `(exception_date.lte.${endDate})`);
+    url.searchParams.set('order', 'exception_date.asc,start_time.asc');
+    const response = await fetch(url, { headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    } });
+    const rows = await response.json();
+    if (!response.ok || !Array.isArray(rows)) throw new Error('Schedule exceptions unavailable.');
+    res.set('Cache-Control', 'no-store');
+    return res.json(rows);
+  } catch (error) {
+    console.error('Schedule exceptions fetch failed:', error);
+    return res.status(503).json({ error: 'Could not load upcoming schedule changes.' });
+  }
+});
+
+app.get('/admin/schedule-exceptions', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  try {
+    const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+    url.searchParams.set('select', 'schedule_id,exception_date,start_time,end_time,reason,is_closed_all_day');
+    url.searchParams.set('exception_date', `gte.${getGymClockParts().date}`);
+    url.searchParams.set('order', 'exception_date.asc,start_time.asc');
+    const response = await fetch(url, { headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    } });
+    const rows = await response.json();
+    if (!response.ok || !Array.isArray(rows)) throw new Error(rows?.message || 'Could not load future schedule changes.');
+    res.set('Cache-Control', 'no-store');
+    return res.json(rows);
+  } catch (error) {
+    console.error('Admin schedule exceptions fetch failed:', error);
+    return res.status(503).json({ error: 'Could not load future schedule changes.' });
+  }
+});
+
+app.get('/admin/schedule-options', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  const dayOfWeek = Number(req.query.day_of_week);
+  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) {
+    return res.status(400).json({ error: 'Day of week must be a number from 0 to 6.' });
+  }
+  try {
+    const url = new URL(`${supabaseUrl}/rest/v1/operating_hours`);
+    url.searchParams.set('select', 'schedule_id,open_time,close_time,is_closed_all_day');
+    url.searchParams.set('day_of_week', `eq.${dayOfWeek}`);
+    url.searchParams.set('order', 'open_time.asc');
+    const response = await fetch(url, { headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    } });
+    const rows = await response.json();
+    if (!response.ok || !Array.isArray(rows)) throw new Error('Could not load regular hours.');
+    return res.json(rows);
+  } catch (error) {
+    console.error('Schedule options fetch failed:', error);
+    return res.status(503).json({ error: 'Could not load regular hours for this date.' });
+  }
+});
+
+app.post('/admin/schedule-exceptions', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  const { exception_date: date } = req.body;
+  const validDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+    && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  const closed = req.body.is_closed_all_day === true;
+  const timePattern = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
+  if (!validDate || date < getGymClockParts().date) {
+    return res.status(400).json({ error: 'Choose a valid date from today onward.' });
+  }
+  if (!closed && (!timePattern.test(req.body.start_time || '') || !timePattern.test(req.body.end_time || ''))) {
+    return res.status(400).json({ error: 'Enter valid start and end times, or mark the gym closed all day.' });
+  }
+  try {
+    const dayOfWeek = new Date(`${date}T00:00:00Z`).getUTCDay();
+    const scheduleUrl = new URL(`${supabaseUrl}/rest/v1/operating_hours`);
+    scheduleUrl.searchParams.set('select', 'schedule_id');
+    scheduleUrl.searchParams.set('day_of_week', `eq.${dayOfWeek}`);
+    scheduleUrl.searchParams.set('order', 'open_time.asc');
+    scheduleUrl.searchParams.set('limit', '1');
+    const scheduleResponse = await fetch(scheduleUrl, { headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+    } });
+    const matchingSchedules = await scheduleResponse.json();
+    if (!scheduleResponse.ok || !Array.isArray(matchingSchedules) || !matchingSchedules.length) {
+      return res.status(400).json({ error: 'No regular schedule is configured for that date.' });
+    }
+    const scheduleId = matchingSchedules[0].schedule_id;
+    const sameDateExceptions = await requestScheduleExceptionsForDate(date);
+    if (scheduleExceptionRangesOverlap({
+      start_time: req.body.start_time,
+      end_time: req.body.end_time,
+      is_closed_all_day: closed,
+    }, sameDateExceptions)) {
+      return res.status(409).json({ error: 'This schedule change overlaps another exception on that date.' });
+    }
+    const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify({
+        schedule_id: scheduleId,
+        exception_date: date,
+        start_time: closed ? '00:00:00' : req.body.start_time,
+        end_time: closed ? '23:59:59' : req.body.end_time,
+        reason: typeof req.body.reason === 'string' ? req.body.reason.trim() || null : null,
+        is_closed_all_day: closed,
+      }),
+    });
+    const responseText = await response.text();
+    let result;
+    try { result = responseText ? JSON.parse(responseText) : {}; } catch { result = { message: responseText }; }
+    if (!response.ok) {
+      if (response.status === 409 || result.code === '23505') {
+        return res.status(409).json({ error: 'A schedule change already exists for this regular schedule and date. Edit the existing entry instead.' });
+      }
+      console.error('Schedule exception create rejected:', result);
+      return res.status(500).json({ error: result.message || result.details || 'Could not add schedule change.' });
+    }
+    return res.status(201).json({ ok: true, rows: result });
+  } catch (error) {
+    console.error('Schedule exception create failed:', error);
+    return res.status(500).json({ error: error.message || 'Could not add schedule change.' });
+  }
+});
+
+app.patch('/admin/schedule-exceptions', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  const { schedule_id: scheduleId, exception_date: date } = req.body;
+  const validDate = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
+    && !Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+    && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+  const closed = req.body.is_closed_all_day === true;
+  const timePattern = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
+  if (!scheduleId || !validDate || date < getGymClockParts().date) {
+    return res.status(400).json({ error: 'A valid future schedule and date are required.' });
+  }
+  if (!closed && (!timePattern.test(req.body.start_time || '') || !timePattern.test(req.body.end_time || ''))) {
+    return res.status(400).json({ error: 'Enter valid start and end times, or mark the gym closed all day.' });
+  }
+  try {
+    const sameDateExceptions = (await requestScheduleExceptionsForDate(date))
+      .filter((item) => String(item.schedule_id) !== String(scheduleId));
+    if (scheduleExceptionRangesOverlap({
+      start_time: req.body.start_time,
+      end_time: req.body.end_time,
+      is_closed_all_day: closed,
+    }, sameDateExceptions)) {
+      return res.status(409).json({ error: 'This schedule change overlaps another exception on that date.' });
+    }
+    const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+    url.searchParams.set('schedule_id', `eq.${scheduleId}`);
+    url.searchParams.set('exception_date', `eq.${date}`);
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        apikey: supabaseServiceRoleKey,
+        Authorization: `Bearer ${supabaseServiceRoleKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify({
+        start_time: closed ? '00:00:00' : req.body.start_time,
+        end_time: closed ? '23:59:59' : req.body.end_time,
+        reason: typeof req.body.reason === 'string' ? req.body.reason.trim() || null : null,
+        is_closed_all_day: closed,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result?.message || 'Could not update schedule exception.');
+    return res.json({ ok: true, rows: result });
+  } catch (error) {
+    console.error('Schedule exception update failed:', error);
+    return res.status(500).json({ error: 'Could not update schedule exception.' });
+  }
+});
+
+app.delete('/admin/schedule-exceptions', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  const { schedule_id: scheduleId, exception_date: date } = req.body;
+  if (!scheduleId || typeof date !== 'string' || date < getGymClockParts().date) {
+    return res.status(400).json({ error: 'A future schedule exception is required.' });
+  }
+  try {
+    const url = new URL(`${supabaseUrl}/rest/v1/schedule_exceptions`);
+    url.searchParams.set('schedule_id', `eq.${scheduleId}`);
+    url.searchParams.set('exception_date', `eq.${date}`);
+    const response = await fetch(url, { method: 'DELETE', headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      Prefer: 'return=representation',
+    } });
+    if (!response.ok) throw new Error('Could not remove schedule exception.');
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Schedule exception removal failed:', error);
+    return res.status(500).json({ error: 'Could not remove schedule exception.' });
   }
 });
 
@@ -1466,6 +2135,16 @@ app.get('/admin', (req, res) => {
   if (!req.profile) return res.redirect('/home?adminLogin=required');
   if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
   return res.render('admin', { user: req.profile, currentPath: req.path });
+});
+app.get('/admin/okrs', (req, res) => {
+  if (!req.profile) return res.redirect('/home?adminLogin=required');
+  if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
+  return res.render('okrs', { user: req.profile, currentPath: req.path });
+});
+app.get('/admin/schedule', (req, res) => {
+  if (!req.profile) return res.redirect('/home?adminLogin=required');
+  if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
+  return res.render('schedule-admin', { user: req.profile, currentPath: req.path, gymTimeZone });
 });
 
 

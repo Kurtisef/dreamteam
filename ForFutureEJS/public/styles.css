@@ -1219,6 +1219,13 @@ main {
 
 }
 
+.cams.single-feed {
+
+  grid-template-columns: minmax(0, 1fr);
+
+  max-width: 960px;
+
+}
 
 
 .cam {
@@ -1245,6 +1252,19 @@ main {
 
 }
 
+.twitch-player {
+
+  position: absolute;
+
+  inset: 0;
+
+  width: 100%;
+
+  height: 100%;
+
+  border: 0;
+
+}
 
 
 .scene {
@@ -1785,7 +1805,6 @@ main {
 }
 
 
-
 .auth-btn:focus-visible,
 
 .auth-dialog button:focus-visible,
@@ -1924,6 +1943,47 @@ main {
 
 }
 
+.auth-dialog .auth-create-profile {
+
+  margin: 12px auto 0;
+
+}
+
+.auth-admin-footer {
+
+  padding: 18px 16px 24px;
+
+  text-align: right;
+
+}
+
+.auth-admin-footer button {
+
+  padding: 2px 4px;
+
+  border: 0;
+
+  background: none;
+
+  color: var(--mute);
+
+  font: inherit;
+
+  font-size: .85rem;
+
+  text-decoration: underline;
+
+  cursor: pointer;
+
+}
+
+.auth-admin-footer button:focus-visible {
+
+  outline: 3px solid #7FB2FF;
+
+  outline-offset: 2px;
+
+}
 
 
 #auth-msg { margin-top: 12px; min-height: 1.5em; font-size: .9rem; }
@@ -2396,5 +2456,164 @@ main {
 
 }
 
+@media (max-width: 720px) {
+
+  .top .in {
+
+    display: grid;
+
+    grid-template-columns: minmax(0, 1fr) auto;
+
+    gap: 6px 10px;
+
+  }
+
+  .top h1,
+
+  .top p,
+
+  .tabs {
+
+    grid-column: 1 / -1;
+
+  }
+
+  .top h1 {
+
+    padding-right: 0;
+
+  }
+
+  .auth-user {
+
+    position: static;
+
+    min-width: 0;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+    white-space: nowrap;
+
+    align-self: center;
+
+    font-size: .75rem;
+
+  }
+
+  .auth-btn {
+
+    position: static;
+
+    justify-self: end;
+
+  }
+
+  .tabs {
+
+    margin-top: 6px;
+
+  }
+
+}
+
 /* Password field matches the existing email field styling. */
 .auth-dialog input[type="password"] { letter-spacing: .02em; }
+
+.plan-left-column {
+  display: grid;
+  gap: 20px;
+  align-content: start;
+}
+
+.visit-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.visit-history-header h3 {
+  margin: 0;
+}
+
+.attendance-note {
+  margin: -4px 0 12px;
+  font-size: .82rem;
+}
+
+.hide-responded-label,
+.attendance-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--mute);
+  font-size: .85rem;
+  cursor: pointer;
+}
+
+.hide-responded-label input {
+  accent-color: var(--go);
+}
+
+.attendance-choice {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  user-select: none;
+}
+
+.attendance-choice:has(input:checked) {
+  border-color: var(--go);
+  background: color-mix(in srgb, var(--go) 10%, var(--card));
+  color: var(--ink);
+}
+
+.attendance-choice input[type="radio"] {
+  display: block;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 0;
+  accent-color: var(--go);
+  cursor: pointer;
+}
+
+.attendance-choice:focus-within {
+  outline: 2px solid var(--go);
+  outline-offset: 2px;
+}
+
+.attendance-item {
+  align-items: center;
+}
+
+.attendance-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+@media (max-width: 520px) {
+  .attendance-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+.upcoming-exceptions h2,
+.upcoming-exceptions h3 { margin-top: 0; }
+.home .upcoming-exceptions { margin: 20px 0; }
+.week .upcoming-exceptions { margin: 0 0 16px; }
+.exception-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .65rem; }
+.exception-list li { display: flex; flex-wrap: wrap; gap: .35rem .75rem; align-items: baseline; border-top: 1px solid rgba(20, 35, 50, .12); padding-top: .65rem; }
+.exception-reason { color: #52616d; font-size: .92em; }
+@media (max-width: 520px) {
+  .exception-reason { flex-basis: 100%; }
+}
