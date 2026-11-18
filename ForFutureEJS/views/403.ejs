@@ -9,7 +9,7 @@
     <Table>
         <Thead>
             <tr>
-                <th>User Name</th>
+                <th>Display Name</th>
                 <th>Email</th>
                 <th>password</th>
                 <th>action</th>
@@ -17,7 +17,7 @@
         </Thead>
         <tbody>
             <% users.foreach(user => {%>
-                <tr><%=user.user_name%></tr>
+                <tr><%=user.display_name%></tr>
                 <tr><%=user.user_email%></tr>
                 <tr><%=user.user_password%></tr>
                 <tr><a class="btn btn-secondary" href="/">edit</a></tr>
