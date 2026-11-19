@@ -1048,6 +1048,57 @@ async function requestTrafficEvents() {
   };
 }
 
+async function updateTrafficEventWaitTime(eventId, waitTimeMin) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Admin database access is not configured.');
+  }
+
+  const url = new URL(`${supabaseUrl}/rest/v1/traffic_events`);
+  url.searchParams.set('event_id', `eq.${eventId}`);
+  url.searchParams.set('event_type', 'eq.in');
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify({ wait_time_min: waitTimeMin }),
+  });
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(result?.message || result?.hint || `Traffic event update failed (${response.status}).`);
+  }
+  if (!Array.isArray(result) || result.length !== 1) {
+    throw new Error('The check-in event was not found or could not be updated.');
+  }
+}
+
+async function removeTrafficEvent(eventId) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Admin database access is not configured.');
+  }
+
+  const url = new URL(`${supabaseUrl}/rest/v1/traffic_events`);
+  url.searchParams.set('event_id', `eq.${eventId}`);
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      Prefer: 'return=representation',
+    },
+  });
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(result?.message || result?.hint || `Traffic event delete failed (${response.status}).`);
+  }
+  if (!Array.isArray(result) || result.length !== 1) {
+    throw new Error('The traffic event was not found or could not be deleted.');
+  }
+}
+
 async function deleteTrafficEvents() {
   if (!supabaseUrl || !supabaseServiceRoleKey) {
     throw new Error('Admin database access is not configured.');
@@ -1144,7 +1195,7 @@ async function readTrafficEventsSince(since = null) {
   const pageSize = 1000;
   for (let offset = 0; ; offset += pageSize) {
     const url = new URL(`${supabaseUrl}/rest/v1/traffic_events`);
-    url.searchParams.set('select', 'event_type,wait_time_min,created_at');
+    url.searchParams.set('select', 'event_id,event_type,created_at,wait_time_min');
     if (since) url.searchParams.set('created_at', `gte.${since.toISOString()}`);
     url.searchParams.set('order', 'created_at.asc');
     url.searchParams.set('limit', String(pageSize));
@@ -1734,6 +1785,46 @@ app.post('/admin/events', async (req, res) => {
   } catch (error) {
     console.error('Traffic event insert failed:', error);
     return res.status(500).json({ error: `Could not save the traffic event: ${error.message}` });
+  }
+});
+
+app.patch('/admin/events/:eventId', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.eventId)) {
+    return res.status(400).json({ error: 'A valid traffic event ID is required.' });
+  }
+
+  const waitTimeMin = req.body.wait_time_min;
+  if (
+    waitTimeMin !== null
+    && (!Number.isInteger(waitTimeMin) || waitTimeMin < 0 || waitTimeMin > 59)
+  ) {
+    return res.status(400).json({ error: 'Wait time must be null or a whole number from 0 to 59 minutes.' });
+  }
+
+  try {
+    await updateTrafficEventWaitTime(req.params.eventId, waitTimeMin);
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Traffic event update failed:', error);
+    return res.status(500).json({ error: `Could not update the check-in wait time: ${error.message}` });
+  }
+});
+
+app.delete('/admin/events/:eventId', async (req, res) => {
+  if (!req.profile) return res.status(401).json({ error: 'Admin login required.' });
+  if (req.profile.role !== 'admin') return res.status(403).json({ error: 'Admin access required.' });
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.eventId)) {
+    return res.status(400).json({ error: 'A valid traffic event ID is required.' });
+  }
+
+  try {
+    await removeTrafficEvent(req.params.eventId);
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Traffic event delete failed:', error);
+    return res.status(500).json({ error: `Could not delete the traffic event: ${error.message}` });
   }
 });
 
