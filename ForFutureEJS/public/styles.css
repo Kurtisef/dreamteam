@@ -184,6 +184,27 @@ p {
 
 }
 
+.top .home-brand {
+
+  display: flex;
+
+  align-items: center;
+
+  gap: .35em;
+
+}
+
+.home-brand img {
+
+  display: block;
+
+  width: auto;
+
+  height: 1em;
+
+  flex: 0 0 auto;
+
+}
 
 
 .top p {
@@ -2533,6 +2554,12 @@ button.auth-user:hover { text-decoration: underline; }
   }
 
   .top h1 {
+
+    padding-right: 0;
+
+  }
+
+  .top .home-brand {
 
     padding-right: 0;
 
