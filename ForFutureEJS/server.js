@@ -79,6 +79,8 @@ async function requestProfiles({ method = 'GET', filters = {}, body } = {}) {
   return result;
 }
 
+
+
 function normalizeProfileEmail(value) {
   const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
   if (
@@ -2154,6 +2156,115 @@ app.get('/admin/greg', async (req, res) => {
   const users = await requestProfiles();
   return res.render('greg', { user: req.profile, currentPath: req.path, users: users });
 });
+
+/*-------------------------------------------edit user routes-------------------------------------------------------------*/
+app.get('/admin/editUser/:email', async (req,res) =>{
+   if (!req.profile) return res.redirect('/home?adminLogin=required');
+  if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
+  try {
+    const email = decodeURIComponent(req.params.email);
+    const matches = await requestProfiles({
+      filters: { email: `eq.${email}`, limit: '1' },
+    });
+    const selectedUser = matches[0];
+
+    if (!selectedUser) return res.status(404).send('User not found.');
+
+    return res.render('editUser', { selectedUser, user: req.profile, currentPath: req.path });
+  } catch (error) {
+    console.error('Could not load user for editing:', error);
+    return res.status(500).send('Could not load that user.');
+  }
+});
+app.post("/admin/editUser/:email", async (req, res) => {
+    try {
+        const email = decodeURIComponent(req.params.email);
+        const newEmail = normalizeProfileEmail(req.body.email);
+        const displayName = typeof req.body.display_name === 'string'
+      ? req.body.display_name.trim()
+      : '';
+
+    if (!displayName) {
+      return res.status(400).send('Display name is required.');
+    }
+
+    const updated = await requestProfiles({
+      method: 'PATCH',
+      filters: { email: `eq.${email}` },
+      body: { email: newEmail, display_name: displayName },
+    });
+
+    if (!Array.isArray(updated) || updated.length === 0) {
+      return res.status(404).send('User not found.');
+    }
+
+    return res.redirect('/admin/greg');
+  } catch (error) {
+    console.error('Profile update failed:', error);
+    return res.status(400).send(error.message || 'Could not update profile.');
+  }
+});
+
+
+/*-----------------------------------------------add user routes------------------------------------------------------------*/
+app.get('/admin/addUser', async (req,res) =>{
+   if (!req.profile) return res.redirect('/home?adminLogin=required');
+  if (req.profile.role !== 'admin') return res.status(403).send('Admin access is required.');
+  const users = await requestProfiles();
+  return res.render('addUser', { user: req.profile, currentPath: req.path, users: users });
+});
+app.post("/admin/addUser", async (req, res) => {
+    try {
+
+    const newEmail = normalizeProfileEmail(req.body.email);
+    const New_displayName = typeof req.body.display_name === 'string'
+      ? req.body.display_name.trim()
+      : '';
+
+    if (!New_displayName) {
+      return res.status(400).send('Display name is required.');
+    }
+
+    const newUser = await requestProfiles({
+      method: 'POST',
+      body: {
+        email: newEmail,
+        display_name: New_displayName
+      },
+    });
+
+    return res.redirect('/admin/greg');
+  } catch (error) {
+    console.error('Profile update failed:', error);
+    return res.status(400).send(error.message || 'Could not update profile.');
+  }
+});
+   
+/*----------------------------------------------------------------------------------------------------------*/
+app.post('/admin/deleteUser/:email', async (req, res) => {
+  if (!req.profile) return res.redirect('/home?adminLogin=required');
+  if (req.profile.role !== 'admin') {
+    return res.status(403).send('Admin access is required.');
+  }
+
+  try {
+    const email = decodeURIComponent(req.params.email);
+
+    const deleted = await requestProfiles({
+      method: 'DELETE',
+      filters: { email: `eq.${email}` },
+    });
+
+
+    return res.redirect('/admin/greg');
+  } catch (error) {
+    console.error('Profile deletion failed:', error);
+    return res.status(500).send('Could not delete profile.');
+  }
+});
+
+
+
 
 
 app.use((req, res) => {

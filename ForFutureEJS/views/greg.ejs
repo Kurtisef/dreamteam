@@ -9,6 +9,7 @@
 <body>
     <div class="container mt-4">
         <h1>Users</h1>
+        <a class="btn btn-success" href="/admin/addUser">Add User</a>
         <table class="table table-striped table-bordered">
             <thead class="table-dark">
                 <tr>
@@ -23,13 +24,17 @@
                     <td><%=user.display_name%></td>
                     <td><%=user.email%></td>
                     <td>
-                        <a class="btn btn-secondary" href="/">edit</a>
-                        <a class="btn btn-secondary" href="/">delete</a>
+                        <a class="btn btn-secondary" href="/admin/editUser/<%= encodeURIComponent(user.email) %>" >edit</a>
+                        <form method="post" class="d-inline" action="/admin/deleteUser/<%= encodeURIComponent(user.email) %>" method="POST" class="d-inline"
+                              onsubmit="return confirm('Delete <%= user.email %>?');">
+                            <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                        </form>
                     </td>
                 </tr>
                 <% }) %>
             </tbody>
         </table>
     </div>
+
 </body>
 </html>
